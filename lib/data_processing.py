@@ -62,7 +62,7 @@ class FileData:
                                          step_cal_drive_freq=step_cal_drive_freq,max_freq=max_freq)
         else:
             self.calibrate_bead_response(step_cal_drive_freq=step_cal_drive_freq,max_freq=max_freq)
-        self.get_boolean_cant_filter(num_harmonics=num_harmonics,harms=harms,width=width,max_freq=max_freq)
+        self.get_boolean_cant_mask(num_harmonics=num_harmonics,harms=harms,width=width,max_freq=max_freq)
         self.get_ffts_and_noise(noise_bins=noise_bins)
         # for use with AggregateData, don't carry around all the raw data
         if lightweight:
@@ -340,10 +340,10 @@ class FileData:
         return Hout
     
 
-    def build_drive_filter(self, drive_fft, freqs, num_harmonics=10, width=0, harms=[], max_freq=2500.):
+    def build_drive_mask(self, drive_fft, freqs, num_harmonics=10, width=0, harms=[], max_freq=2500.):
         '''
         Identify the fundamental drive frequency and make an array of harmonics specified
-        by the function arguments, then make a notch filter of the width specified around these harmonics.
+        by the function arguments, then make a notch mask of the width specified around these harmonics.
         '''
 
         # index of maximum frequency
@@ -353,42 +353,42 @@ class FileData:
         fund_ind = np.argmax(np.abs(drive_fft[1:max_ind])) + 1
         drive_freq = freqs[fund_ind]
 
-        # filter is  initialized with 1 at the drive frequency and 0 elsewhere
-        drive_filter = np.zeros(len(drive_fft))
-        drive_filter[fund_ind] = 1.0
+        # mask is  initialized with 1 at the drive frequency and 0 elsewhere
+        drive_mask = np.zeros(len(drive_fft))
+        drive_mask[fund_ind] = 1.0
 
-        # can make the notch filter wider than 1 bin with the 'width' argument
+        # can make the notch mask wider than 1 bin with the 'width' argument
         if width:
             lower_ind = np.argmin(np.abs(drive_freq - 0.5 * width - freqs))
             upper_ind = np.argmin(np.abs(drive_freq + 0.5 * width - freqs))
-            drive_filter[lower_ind:upper_ind+1] = 1.0
+            drive_mask[lower_ind:upper_ind+1] = 1.0
 
         # create default array of harmonics if an input is not provided
         if len(harms) == 0:
             harms = np.array([x+1 for x in range(num_harmonics)])
         # remove the fundamental frequency if 1 is not in the provided list of harmonics
         elif 1 not in harms:
-            drive_filter[fund_ind] = 0.0
+            drive_mask[fund_ind] = 0.0
             if width:
-                drive_filter[lower_ind:upper_ind+1] = 0.0
+                drive_mask[lower_ind:upper_ind+1] = 0.0
 
-        # loop over harmonics and add them to the filter
+        # loop over harmonics and add them to the mask
         for n in harms:
             harm_ind = np.argmin( np.abs(n * drive_freq - freqs) )
-            drive_filter[harm_ind] = 1.0 
+            drive_mask[harm_ind] = 1.0 
             if width:
                 h_lower_ind = np.argmin(np.abs(n * drive_freq - 0.5 * width - freqs))
                 h_upper_ind = np.argmin(np.abs(n * drive_freq + 0.5 * width - freqs))
-                drive_filter[h_lower_ind:h_upper_ind+1] = 1.0
+                drive_mask[h_lower_ind:h_upper_ind+1] = 1.0
         
         # a boolean array is ultimately needed so do that conversion here
-        drive_filter = drive_filter > 0
+        drive_mask = drive_mask > 0
 
-        return drive_filter
+        return drive_mask
 
-    def get_boolean_cant_filter(self, num_harmonics=10, harms=[], width=0, max_freq=2500.):
+    def get_boolean_cant_mask(self, num_harmonics=10, harms=[], width=0, max_freq=2500.):
         '''
-        Build a boolean filter of a given width for the cantilever drive for the specified harnonics
+        Build a boolean mask of a given width for the cantilever drive for the specified harnonics
         '''
 
         # driven axis is the one with the maximum amplitude of driving voltage
@@ -400,13 +400,13 @@ class FileData:
         # fft of the cantilever position vector
         drive_fft = np.fft.rfft(drive_vec)
 
-        # get the notch filter for the given harmonics, as well as the index of the fundamental
+        # get the notch mask for the given harmonics, as well as the index of the fundamental
         # frequency and the drive frequency
-        drive_filter = self.build_drive_filter(drive_fft, self.freqs, num_harmonics=num_harmonics, \
+        drive_mask = self.build_drive_mask(drive_fft, self.freqs, num_harmonics=num_harmonics, \
                                                harms=harms, width=width, max_freq=max_freq)
 
-        # create array containing the indices of the values that survive the filter
-        good_inds = np.arange(len(drive_filter)).astype(int)[drive_filter]
+        # create array containing the indices of the values that survive the mask
+        good_inds = np.arange(len(drive_mask)).astype(int)[drive_mask]
 
         # set indices as class attributes
         self.good_inds = good_inds
@@ -580,6 +580,9 @@ class AggregateData:
         self.file_data_objs = file_data_objs
         # remove the bad files from all relevant class variables
         self.__purge_bad_files()
+        if len(self.bad_files):
+            print('Warning: {} files could not be loaded.'.format(len(self.bad_files)))
+        print('Successfully loaded {} files.'.format(len(self.file_list)))
         
 
     def process_file(self,file_path,lightweight=True):
