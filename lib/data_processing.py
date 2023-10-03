@@ -6,11 +6,13 @@ import pickle
 import yaml
 import scipy.interpolate as interp
 import scipy.signal as signal
+from scipy.optimize import curve_fit
 from tqdm import tqdm
 from joblib import Parallel, delayed
 from itertools import product
 from copy import deepcopy
 from funcs import *
+from plotting import *
 
 
 class FileData:
@@ -43,10 +45,12 @@ class FileData:
         self.drive_fft = np.array(())
         self.force_cal_factors = np.array([0,0,0])
         self.is_bad = False
+        self.qpd_diag_mat = np.array(((1.,1.,-1.,-1.),\
+                                      (1.,-1.,1.,-1.)))
 
 
-    def load_data(self,step_cal_drive_freq=71.0,max_freq=2500.,num_harmonics=10,\
-                     harms=[],width=0,noise_bins=10,lightweight=False):
+    def load_data(self,tf_path=None,step_cal_drive_freq=71.0,max_freq=2500.,num_harmonics=10,\
+                     harms=[],width=0,noise_bins=10,diagonalize_qpd=False,lightweight=False):
         '''
         Applies calibrations to the cantilever data and QPD data, then gets FFTs for both.
         '''
@@ -57,11 +61,9 @@ class FileData:
         self.nsamp = len(self.times)
         self.freqs = np.fft.rfftfreq(self.nsamp, d=1.0/self.fsamp)
         self.calibrate_stage_position()
-        if int(self.date) < 20230101:
-            self.calibrate_bead_response('/data/new_trap_processed/calibrations/transfer_funcs/20200320.trans',\
-                                         step_cal_drive_freq=step_cal_drive_freq,max_freq=max_freq)
-        else:
-            self.calibrate_bead_response(step_cal_drive_freq=step_cal_drive_freq,max_freq=max_freq)
+        if diagonalize_qpd:
+            self.get_diag_mat()
+        self.calibrate_bead_response(tf_path=tf_path,step_cal_drive_freq=step_cal_drive_freq,max_freq=max_freq)
         self.get_boolean_cant_mask(num_harmonics=num_harmonics,harms=harms,width=width,max_freq=max_freq)
         self.get_ffts_and_noise(noise_bins=noise_bins)
         # for use with AggregateData, don't carry around all the raw data
@@ -71,6 +73,7 @@ class FileData:
             self.quad_raw_data = np.array(((),(),()))
             self.cant_pos_calibrated = np.array(((),(),()))
             self.bead_force_calibrated = np.array(((),(),()))
+            self.bead_ffts_full = np.array(((),(),()))
 
 
     def read_hdf5(self):
@@ -97,6 +100,18 @@ class FileData:
         dd['cantilever_DC'] = [cant_voltages[i] for i in [0,2,4]]
         dd['cantilever_amp'] = [cant_voltages[i] for i in [1,3,5]]
         self.data_dict = dd
+        f.close()
+
+
+    def get_diag_mat(self):
+        '''
+        Read the config.yaml in the directory where the file is saved to get the matrix
+        which diagonalizes the QPD position response.
+        '''
+        config_path = '/'.join(self.file_name.split('/')[:-1])+'/config.yaml'
+        with open(config_path,'r') as infile:
+            config = yaml.safe_load(infile)
+        self.qpd_diag_mat = np.array(config['qpd_diag_mat'])
     
 
     def extract_quad(self):
@@ -149,6 +164,10 @@ class FileData:
             amps[i] = amps[i][:min_length]
             phases[i] = phases[i][:min_length]
 
+        # store the raw QPD data so it can be used to diagonalize the x/y responses
+        self.quad_amps = np.array(amps)
+        self.quad_phases = np.array(phases)
+
         # return numpy arrays
         return quad_times, np.array(amps), np.array(phases)
     
@@ -185,18 +204,13 @@ class FileData:
         # III -> 3
         # IV -> 1
 
-        # get top, bottom, left, right from raw quad data
-        right = amps[0] + amps[1]
-        left = amps[2] + amps[3]
-        top = amps[0] + amps[2]
-        bottom = amps[1] + amps[3]
-
-        # get x and y from left/right and top/bottom
-        x = right - left
-        y = top - bottom
+        # multiply vector of qpd amps by calibration matrix
+        xy_vec = np.matmul(self.qpd_diag_mat,amps[:4,:])
+        x = xy_vec[0,:]
+        y = xy_vec[1,:]
 
         # total light to normalize by
-        quad_sum = right + left
+        quad_sum = np.sum(amps[:4,:],axis=0)
 
         # set object attribute with a numpy array of x,y,z
         self.quad_raw_data = np.array([x.astype(np.float64)/quad_sum,y.astype(np.float64)/quad_sum,phases[4]])
@@ -210,9 +224,10 @@ class FileData:
 
         # for data from 2023 and later, the code will automatically find the transfer
         # function in the right format. For old data, specify the path manually
-        if tf_path is None:
-            Harr = self.tf_array_fitted(self.freqs,max_freq=max_freq)
+        if int(self.date) > 20230101:
+            Harr = self.tf_array_fitted(self.freqs,tf_path=tf_path,max_freq=max_freq)
         else:
+            tf_path = '/data/new_trap_processed/calibrations/transfer_funcs/20200320.trans'
             Harr = self.tf_array_interpolated(self.freqs,tf_path)
 
         # force calibration factor at driven frequency
@@ -240,14 +255,15 @@ class FileData:
         self.bead_force_calibrated = np.fft.irfft(calibrated_fft)
 
 
-    def tf_array_fitted(self,freqs,max_freq=2500.):
+    def tf_array_fitted(self,freqs,tf_path=None,max_freq=2500.):
         '''
         Get the transfer function array from the hdf5 file containing the fitted poles,
         zeros, and gain from the measured transfer functions along x, y, and z, and returns it.
         '''
 
         # transfer function data should be stored here in a folder named by the date
-        tf_path = '/data/new_trap_processed/calibrations/transfer_funcs/'+str(self.date)+'/TF.h5'
+        if tf_path is None:
+            tf_path = '/data/new_trap_processed/calibrations/transfer_funcs/'+str(self.date)+'/TF.h5'
         tf_file = h5py.File(tf_path,'r')
 
         ### Compute TF at frequencies of interest. Appropriately inverts
@@ -552,7 +568,8 @@ class AggregateData:
                 raise Exception('Error: config file not found in directory.')
             files = os.listdir(dir)
             # only add files, not folders, and ensure they end with .h5 and have the correct prefix
-            files = [dir+'/'+f for f in files if (os.path.isfile(dir+'/'+f) and (self.file_prefixes[i] in f and f.endswith('.h5')))]
+            files = [dir+'/'+f for f in files if (os.path.isfile(dir+'/'+f) and \
+                                                  (self.file_prefixes[i] in f and f.endswith('.h5')))]
             files.sort(key=get_file_number)
             num_to_load = min(self.num_to_load[i],len(files))
             file_list += files[:num_to_load]
@@ -565,14 +582,15 @@ class AggregateData:
         self.__bin_by_config_data()
 
 
-    def load_file_data(self,num_cores=1,lightweight=True):
+    def load_file_data(self,num_cores=1,diagonalize_qpd=False,lightweight=True):
         '''
         Create a FileData object for each of the files in the file list and load
         in the relevant data for physics analysis.
         '''
         self.get_file_list()
-        file_data_objs = Parallel(n_jobs=num_cores)(delayed(self.process_file)(file_path,lightweight) \
-                                                      for file_path in tqdm(self.file_list))
+        file_data_objs = Parallel(n_jobs=num_cores)(delayed(self.process_file)\
+                                                    (file_path,diagonalize_qpd,lightweight) \
+                                                    for file_path in tqdm(self.file_list))
         # record which files are bad in the self.bin_indices array
         for i,file_data_obj in enumerate(file_data_objs):
             if file_data_obj.is_bad == True:
@@ -583,26 +601,27 @@ class AggregateData:
         if len(self.bad_files):
             print('Warning: {} files could not be loaded.'.format(len(self.bad_files)))
         print('Successfully loaded {} files.'.format(len(self.file_list)))
+        self.__build_dict(lightweight=lightweight)
         
 
-    def process_file(self,file_path,lightweight=True):
+    def process_file(self,file_path,diagonalize_qpd=False,lightweight=True):
         '''
         Process data for an individual file and return the FileData object
         '''
         this_file = FileData(file_path)
         try:
-            this_file.load_data(lightweight=lightweight)
+            this_file.load_data(diagonalize_qpd=diagonalize_qpd,lightweight=lightweight)
         except:
             this_file.is_bad = True
         return this_file
     
 
-    def build_dict(self):
+    def __build_dict(self,lightweight=True):
         '''
         Build a dict containing the relevant data from each FileData object to
         make indexing the data easier.
         '''
-
+        print('Building dictionary of file data...')
         agg_dict = {}
         dates = []
         times = []
@@ -616,6 +635,8 @@ class AggregateData:
         bead_ffts_full = []
         sideband_ffts = []
         drive_fft = []
+        quad_amps = []
+        quad_phases = []
         for f in self.file_data_objs:
             dates.append(f.date)
             times.append(f.times)
@@ -629,6 +650,8 @@ class AggregateData:
             bead_ffts_full.append(f.bead_ffts_full)
             sideband_ffts.append(f.sideband_ffts)
             drive_fft.append(f.drive_fft)
+            quad_amps.append(f.quad_amps)
+            quad_phases.append(f.quad_phases)
         agg_dict['dates'] = np.array(dates)
         agg_dict['times'] = np.array(times)
         agg_dict['seismometer'] = np.array(seismometer)
@@ -641,7 +664,12 @@ class AggregateData:
         agg_dict['bead_ffts_full'] = np.array(bead_ffts_full)
         agg_dict['sideband_ffts'] = np.array(sideband_ffts)
         agg_dict['drive_fft'] = np.array(drive_fft)
+        agg_dict['quad_amps'] = np.array(quad_amps)
+        agg_dict['quad_phases'] = np.array(quad_phases)
         self.agg_dict = agg_dict
+        print('Done building dictionary.')
+        if lightweight:
+            self.file_data_objs = []
 
 
     def __bin_by_config_data(self):
@@ -732,6 +760,8 @@ class AggregateData:
         a file falls.
         bin_widths = [x_width_microns, z_width_microns]
         '''
+        print('Binning data by mean cantilever position and seismometer data...')
+
         # add seismometer and bias
         
         # p0_bead and diam_bead are done when data is loaded. Here, binning is done in
@@ -800,6 +830,7 @@ class AggregateData:
         self.seis_thresh = seis_thresh
         self.bin_indices[:,5] = np.array([np.abs(np.mean(self.agg_dict['seismometer'],\
                                                          axis=1))>seis_thresh]).astype(np.int32)
+        print('Done binning data.')
         
 
     def get_slice_indices(self,diam_bead=-1.,descrip='',cant_x=[0.,1e4],cant_z=[0.,1e4],seis_veto=False):
@@ -902,6 +933,107 @@ class AggregateData:
             print('Warning: no data matching specified cuts!')
             
         return list(np.sort(slice_indices))
+
+
+    def diagonalize_qpd(self,fit_inds=None,peak_guess=[400.,370.]):
+        '''
+        Fit the two resonant peaks in x and y and diagonalize the QPD position sensing
+        to remove cross-coupling from one into the other. Writes a matrix to the config file
+        where it can be used by the FileData class to extract x and y from the raw data.
+        '''
+
+        # if no argument is provided, just use all the files
+        if fit_inds is None:
+            fit_inds = np.array(range(len(self.file_list)))
+
+        # use the guess of the peak location as a starting point for fitting
+        freq_ranges = [peak_guess[0]-5.,peak_guess[0]+5.,peak_guess[1]-5.,peak_guess[1]+5.]
+
+        # get corresponding indices
+        freqs = self.agg_dict['freqs'][0]
+        freq_inds = []
+        for f in freq_ranges:
+            freq_inds.append(np.argmin(np.abs(freqs-f)))
+
+        # get mean of the ffts for the data used for the fit
+        mean_ffts_x = np.sqrt(np.mean(np.abs(self.agg_dict['quad_raw_data'][fit_inds][:,0,:])**2,axis=0))
+        mean_ffts_y = np.sqrt(np.mean(np.abs(self.agg_dict['quad_raw_data'][fit_inds][:,1,:])**2,axis=0))
+
+        # resonant frequency in y is lower
+        max_ind_x = freq_inds[0] + np.argmax(mean_ffts_x[freq_inds[0]:freq_inds[1]])
+        max_ind_y = freq_inds[2] + np.argmax(mean_ffts_y[freq_inds[2]:freq_inds[3]])
+
+        # fit a lorentzian to the peaks for better peak location finding
+        p_x,_ = curve_fit(lor,freqs[freq_inds[0]:freq_inds[1]],mean_ffts_y[freq_inds[0]:freq_inds[1]],\
+                          p0=[freqs[max_ind_x],10.,10.])
+        max_ind_x = np.argmin(np.abs(freqs-p_x[0]))
+        p_y,_ = curve_fit(lor,freqs[freq_inds[2]:freq_inds[3]],mean_ffts_y[freq_inds[2]:freq_inds[3]],\
+                          p0=[freqs[max_ind_y],10.,10.])
+        max_ind_y = np.argmin(np.abs(freqs-p_y[0]))
+
+        # get the raw data from each quadrant
+        raw_qpd_1 = self.agg_dict['quad_amps'][fit_inds][:,0,:]
+        raw_qpd_2 = self.agg_dict['quad_amps'][fit_inds][:,1,:]
+        raw_qpd_3 = self.agg_dict['quad_amps'][fit_inds][:,2,:]
+        raw_qpd_4 = self.agg_dict['quad_amps'][fit_inds][:,3,:]
+
+        # normalize by the total at each timestep
+        tot_at_time = raw_qpd_1 + raw_qpd_2 + raw_qpd_3 + raw_qpd_4
+        if tot_at_time.any()<0:
+            print('Warning: potential overflow in sum of quad amps!')
+        raw_qpd_1 = raw_qpd_1/tot_at_time
+        raw_qpd_2 = raw_qpd_2/tot_at_time
+        raw_qpd_3 = raw_qpd_3/tot_at_time
+        raw_qpd_4 = raw_qpd_4/tot_at_time
+
+        # number of samples
+        nsamp = len(raw_qpd_1)
+
+        # take ffts
+        fft_qpd_1 = np.sqrt(np.mean(np.abs(np.fft.rfft(raw_qpd_1)*2./nsamp)**2,axis=0))
+        fft_qpd_2 = np.sqrt(np.mean(np.abs(np.fft.rfft(raw_qpd_2)*2./nsamp)**2,axis=0))
+        fft_qpd_3 = np.sqrt(np.mean(np.abs(np.fft.rfft(raw_qpd_3)*2./nsamp)**2,axis=0))
+        fft_qpd_4 = np.sqrt(np.mean(np.abs(np.fft.rfft(raw_qpd_4)*2./nsamp)**2,axis=0))
+
+        # bins on each side to average over for smoothing
+        df = 5
+        qpd_1x = np.mean(fft_qpd_1[max_ind_x-df:max_ind_x+df])
+        qpd_2x = np.mean(fft_qpd_2[max_ind_x-df:max_ind_x+df])
+        qpd_3x = np.mean(fft_qpd_3[max_ind_x-df:max_ind_x+df])
+        qpd_4x = np.mean(fft_qpd_4[max_ind_x-df:max_ind_x+df])
+        qpd_1y = np.mean(fft_qpd_1[max_ind_y-df:max_ind_y+df])
+        qpd_2y = np.mean(fft_qpd_2[max_ind_y-df:max_ind_y+df])
+        qpd_3y = np.mean(fft_qpd_3[max_ind_y-df:max_ind_y+df])
+        qpd_4y = np.mean(fft_qpd_4[max_ind_y-df:max_ind_y+df])
+
+        # 4x2 matrix, rows are quadrants and columns are f_x and f_y
+        signal_mat = np.array(((qpd_1x,qpd_1y),
+                               (qpd_2x,qpd_2y),
+                               (qpd_3x,qpd_3y),
+                               (qpd_4x,qpd_4y),))
+
+        # matrix describing naive calculation of x and y from QPD data
+        naive_mat = np.array(((1,1,-1,-1),\
+                              (1,-1,1,-1),))
+        
+        # get the response matrix, invert it, multiply to correct naive
+        # matrix, then rescale to give the correct amplitudes
+        resp_mat = np.matmul(naive_mat,signal_mat)
+        scale_mat = np.diag((np.sum(resp_mat,axis=0)))
+        resp_inv = np.linalg.inv(resp_mat)
+        diag_unscaled = np.matmul(resp_inv,naive_mat)
+        diag_mat = np.matmul(scale_mat,diag_unscaled)
+
+        if np.prod(np.sign(diag_mat[:,:2]))!=-1:
+            print('Warning: rows of the diagonalization matrix are not linearly independent!')
+            print('Not writing the matrix to the config file.')
+            print(diag_mat)
+            return
+
+        print('Diagonalization successful!')
+        print('Copy the following into the config.yaml files for the relevant datasets:')
+        print('qpd_diag_mat: [[{:.8f},{:.8f},{:.8f},{:.8f}],[{:.8f},{:.8f},{:.8f},{:.8f}]]'\
+              .format(*[i for i in diag_mat.flatten()]))
     
 
     def merge_objects(self,object_list):
@@ -963,4 +1095,5 @@ class AggregateData:
         infile = open(path,'rb')
         self.__dict__.update(pickle.load(infile).__dict__)
         infile.close()
+        print('AggregateData object loaded from '+path)
 

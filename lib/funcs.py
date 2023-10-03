@@ -143,3 +143,9 @@ def get_file_number(file_name):
     Returns the file number for sorting.
     '''
     return int((file_name.split('.h5')[-2]).split('_')[-1])
+
+def lor(x,x_0,gamma,A):
+    '''
+    Lorentzian function for fitting peaks.
+    '''
+    return A*gamma/((x-x_0)**2.+0.25*gamma**2.)
