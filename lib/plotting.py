@@ -168,7 +168,7 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None):
     return fig,ax
 
 
-def transfer_funcs(path,sensor='QPD',nsamp=50000,fsamp=5000):
+def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000):
     '''
     Plot the transfer functions and the fits for all axes.
     '''
@@ -210,16 +210,31 @@ def transfer_funcs(path,sensor='QPD',nsamp=50000,fsamp=5000):
     rows = 3
     if sensor=='PSPD':
         rows = 2
+    title = 'Magnitudes'
+    if phase:
+        title = 'Phases'
     fig,ax = plt.subplots(rows,3,figsize=(9,2*rows+1),sharex=True,sharey=True)
-    fig.suptitle('Transfer Functions for the '+sensor)
+    fig.suptitle('Transfer Function '+title+' for the '+sensor)
     for i in range(rows):
-        ax[i,0].set_ylabel('Mag [N/N]')
+        if phase:
+            ax[i,0].set_ylabel('Phase [$^\circ$]')
+            ax[i,0].set_ylim([-200,200])
+            ax[i,0].set_yticks([-180,0,180])
+        else:
+            ax[i,0].set_ylabel('Mag [N/N]')
         for j in range(3):
             ax[0,j].set_title('Drive $'+axes[j]+'$')
             ax[-1,j].set_xlabel('Frequency [Hz]')
-            ax[i,j].loglog(tf_freqs[i,j],np.abs(tf_data[i,j]),linestyle='none',marker='o',ms=4,alpha=0.5,label='Measurement')
-            ax[i,j].loglog(freqs[tf_freq_inds[i,j]],force_cal_factors[i]*np.ones(len(tf_data[i,j]))\
-                           /np.abs(Harr[:,i,j][tf_freq_inds[i,j]]),lw=2,label='Fit')
+            if phase:
+                ax[i,j].semilogx(tf_freqs[i,j],np.angle(tf_data[i,j])*180./np.pi,linestyle='none',\
+                                                        marker='o',ms=4,alpha=0.5,label='Measurement')
+                if i==j:
+                    ax[i,j].semilogx(freqs[tf_freq_inds[i,j]],np.angle(np.ones(len(tf_data[i,j]))\
+                                     /Harr[:,i,j][tf_freq_inds[i,j]])*180./np.pi,lw=2,label='Fit')
+            else:
+                ax[i,j].loglog(tf_freqs[i,j],np.abs(tf_data[i,j]),linestyle='none',marker='o',ms=4,alpha=0.5,label='Measurement')
+                ax[i,j].loglog(freqs[tf_freq_inds[i,j]],force_cal_factors[i]*np.ones(len(tf_data[i,j]))\
+                               /np.abs(Harr[:,i,j][tf_freq_inds[i,j]]),lw=2,label='Fit')
             ax[i,j].grid(which='both')
         ax[i,i].legend(fontsize=10)
 
