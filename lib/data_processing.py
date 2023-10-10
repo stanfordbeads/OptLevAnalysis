@@ -6,25 +6,28 @@ import pickle
 import yaml
 import scipy.interpolate as interp
 import scipy.signal as signal
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, minimize
+from scipy.stats import chi2
 from tqdm import tqdm
 from joblib import Parallel, delayed
 from itertools import product
 from copy import deepcopy
 from funcs import *
 from plotting import *
+from stats import *
+import signals as s
 
 
 class FileData:
 
-    def __init__(self,path):
+    def __init__(self,path=''):
         '''
         Initializes a RawData object with some metadata attributes and a dict containing
         the raw data, while setting other attributes to default values.
         '''
         self.file_name = path
         self.data_dict = {}
-        self.date = re.search(r"\d{8,}", self.file_name)[0]
+        self.date = ''
         self.times = np.array(())
         self.amps = np.array(())
         self.phases = np.array(())
@@ -34,15 +37,21 @@ class FileData:
         self.freqs = np.array(())
         self.cant_raw_data = np.array(((),(),()))
         self.quad_raw_data = np.array(((),(),()))
+        self.quad_amps = np.array(((),(),(),(),()))
+        self.quad_phases = np.array(((),(),(),(),()))
         self.cant_pos_calibrated = np.array(((),(),()))
         self.mean_cant_pos = np.array(())
         self.bead_force_calibrated = np.array(((),(),()))
         self.good_inds = np.array(())
+        self.cant_inds = np.array(())
         self.drive_ind = 0
+        self.fund_ind = 0
         self.bead_ffts = np.array(((),(),()))
         self.bead_ffts_full = np.array(((),(),()))
         self.sideband_ffts = np.array(((),(),()))
-        self.drive_fft = np.array(())
+        self.template_ffts = np.array(())
+        self.template_params = np.array(())
+        self.cant_fft = np.array(())
         self.force_cal_factors = np.array([0,0,0])
         self.is_bad = False
         self.qpd_diag_mat = np.array(((1.,1.,-1.,-1.),\
@@ -50,27 +59,33 @@ class FileData:
 
 
     def load_data(self,tf_path=None,step_cal_drive_freq=71.0,max_freq=2500.,num_harmonics=10,\
-                     harms=[],width=0,noise_bins=10,diagonalize_qpd=False,lightweight=False):
+                  harms=[],width=0,noise_bins=10,diagonalize_qpd=False,\
+                  signal_model=None,p0_bead=None,lightweight=False):
         '''
         Applies calibrations to the cantilever data and QPD data, then gets FFTs for both.
         '''
+        self.date = re.search(r"\d{8,}", self.file_name)[0]
         self.read_hdf5()
         self.fsamp = self.data_dict['fsamp']
         self.seismometer = self.data_dict['seismometer']
+        if diagonalize_qpd:
+            self.get_diag_mat()
         self.get_xyz_from_quad()
         self.nsamp = len(self.times)
         self.freqs = np.fft.rfftfreq(self.nsamp, d=1.0/self.fsamp)
         self.calibrate_stage_position()
-        if diagonalize_qpd:
-            self.get_diag_mat()
         self.calibrate_bead_response(tf_path=tf_path,step_cal_drive_freq=step_cal_drive_freq,max_freq=max_freq)
         self.get_boolean_cant_mask(num_harmonics=num_harmonics,harms=harms,width=width,max_freq=max_freq)
         self.get_ffts_and_noise(noise_bins=noise_bins)
+        if signal_model is not None:
+            self.make_templates(signal_model,p0_bead)
         # for use with AggregateData, don't carry around all the raw data
         if lightweight:
             self.data_dict = {}
             self.cant_raw_data = np.array(((),(),()))
             self.quad_raw_data = np.array(((),(),()))
+            self.quad_amps = np.array(((),(),(),(),()))
+            self.quad_phases = np.array(((),(),(),(),()))
             self.cant_pos_calibrated = np.array(((),(),()))
             self.bead_force_calibrated = np.array(((),(),()))
             self.bead_ffts_full = np.array(((),(),()))
@@ -82,8 +97,8 @@ class FileData:
         '''
         f = h5py.File(self.file_name, 'r')
         dd = {}
-        dd['cant_data'] = np.array(f['cant_data'])
-        dd['quad_data'] = np.array(f['quad_data'])
+        dd['cant_data'] = np.array(f['cant_data'],dtype=np.float64)
+        dd['quad_data'] = np.array(f['quad_data'],dtype=np.float64)
         try:
             dd['seismometer'] = np.array(f['seismometer'])
             dd['laser_power'] = np.array(f['laser_power'])
@@ -185,7 +200,7 @@ class FileData:
               + np.repeat([[0.0766,0.0766,0]],self.cant_raw_data.shape[1],axis=0).T)
 
         # save calibrated data as attributes of FileData object
-        self.cant_pos_calibrated = cant_cal_func(self.cant_raw_data)
+        self.cant_pos_calibrated = np.array(cant_cal_func(self.cant_raw_data))
 
         # also save the mean position, used for rough binning of datasets later
         self.mean_cant_pos = np.mean(self.cant_pos_calibrated,axis=1)
@@ -356,21 +371,22 @@ class FileData:
         return Hout
     
 
-    def build_drive_mask(self, drive_fft, freqs, num_harmonics=10, width=0, harms=[], max_freq=2500.):
+    def build_drive_mask(self, cant_fft, freqs, num_harmonics=10, width=0, harms=[], max_freq=2500.):
         '''
         Identify the fundamental drive frequency and make an array of harmonics specified
         by the function arguments, then make a notch mask of the width specified around these harmonics.
+        *** Not clear that the width will ever be used, so it may be removed ***
         '''
 
         # index of maximum frequency
         max_ind = np.argmin(np.abs(freqs - max_freq))
 
         # find the drive frequency, ignoring the DC bin
-        fund_ind = np.argmax(np.abs(drive_fft[1:max_ind])) + 1
+        fund_ind = np.argmax(np.abs(cant_fft[1:max_ind])) + 1
         drive_freq = freqs[fund_ind]
 
         # mask is  initialized with 1 at the drive frequency and 0 elsewhere
-        drive_mask = np.zeros(len(drive_fft))
+        drive_mask = np.zeros(len(cant_fft))
         drive_mask[fund_ind] = 1.0
 
         # can make the notch mask wider than 1 bin with the 'width' argument
@@ -400,9 +416,10 @@ class FileData:
         # a boolean array is ultimately needed so do that conversion here
         drive_mask = drive_mask > 0
 
-        return drive_mask
+        return drive_mask, fund_ind
 
-    def get_boolean_cant_mask(self, num_harmonics=10, harms=[], width=0, max_freq=2500.):
+
+    def get_boolean_cant_mask(self, num_harmonics=10, harms=[], width=0, cant_harms=5, max_freq=2500.):
         '''
         Build a boolean mask of a given width for the cantilever drive for the specified harnonics
         '''
@@ -414,19 +431,29 @@ class FileData:
         drive_vec = self.cant_pos_calibrated[drive_ind]
 
         # fft of the cantilever position vector
-        drive_fft = np.fft.rfft(drive_vec)
+        cant_fft = np.fft.rfft(drive_vec)
 
         # get the notch mask for the given harmonics, as well as the index of the fundamental
         # frequency and the drive frequency
-        drive_mask = self.build_drive_mask(drive_fft, self.freqs, num_harmonics=num_harmonics, \
-                                               harms=harms, width=width, max_freq=max_freq)
+        drive_mask, fund_ind = self.build_drive_mask(cant_fft, self.freqs, num_harmonics=num_harmonics, \
+                                                     harms=harms, width=width, max_freq=max_freq)
 
         # create array containing the indices of the values that survive the mask
         good_inds = np.arange(len(drive_mask)).astype(int)[drive_mask]
 
+        all_inds = np.arange(len(self.freqs)).astype(int)
+        cant_inds = []
+        for i in range(cant_harms):
+            if width != 0:
+                cant_inds += list( all_inds[np.abs(self.freqs - (i+1)*self.freqs[fund_ind]) < 0.5*width] )
+            else:
+                cant_inds.append( np.argmin(np.abs(self.freqs - (i+1)*self.freqs[fund_ind])) )
+
         # set indices as class attributes
-        self.good_inds = good_inds
-        self.drive_ind = drive_ind
+        self.good_inds = good_inds # indices of frequencies where physics search is to be done
+        self.cant_inds = cant_inds # indices of frequencies used to reconstruct cantilever stroke
+        self.drive_ind = drive_ind # index of the driven cantilever axis
+        self.fund_ind = fund_ind # index of the fundamental frequency
 
 
     def get_ffts_and_noise(self, noise_bins=10):   
@@ -448,10 +475,10 @@ class FileData:
         sideband_ffts = np.zeros((3, len(self.good_inds)*noise_bins), dtype=np.complex128)
 
         # get the fft for the cantilever data along the driven axis
-        drive_fft_full = np.fft.rfft(self.cant_pos_calibrated[self.drive_ind])
+        cant_fft_full = np.fft.rfft(self.cant_pos_calibrated[self.drive_ind])
 
-        # now select only the indices for the chosen harmonics
-        drive_fft = drive_fft_full[self.good_inds]
+        # now select only the indices for the chosen number of drive harmonics
+        cant_fft = cant_fft_full[self.cant_inds]
 
         # get the QPD position data
         data = self.bead_force_calibrated
@@ -494,14 +521,63 @@ class FileData:
         norm_factor = 2./self.nsamp
         bead_ffts_full *= norm_factor
         bead_ffts *= norm_factor
-        drive_fft *= norm_factor
+        cant_fft *= norm_factor
         sideband_ffts *= norm_factor
 
         # save the ffts as class attributes
         self.bead_ffts_full = bead_ffts_full
         self.bead_ffts = bead_ffts
-        self.drive_fft = drive_fft
+        self.cant_fft = cant_fft
         self.sideband_ffts = sideband_ffts
+
+
+    def make_templates(self,signal_model,p0_bead,cant_vec=None,num_harms=10):
+        '''
+        Make a template of the response to a given signal model. This is intentionally
+        written to be applicable to a generic model, but for now will only be used
+        for the Yukawa-modified gravity model in which the only parameter is lambda.
+        '''
+
+        if cant_vec is None:
+            cant_vec = [self.mean_cant_pos[0],self.cant_pos_calibrated[1],self.mean_cant_pos[2]]
+
+        # get the bead position in the coordinate system of the attractor
+        bead_x = p0_bead[0] - cant_vec[0]
+        bead_y = p0_bead[1] - cant_vec[1]
+        bead_z = p0_bead[2] - cant_vec[2]
+
+        # if a file hasn't been loaded, make fake good_inds using the typical sampling params
+        good_inds = self.good_inds
+        nsamp = self.nsamp
+        if len(good_inds)==0:
+            nsamp = int(5e4)
+            freqs = np.fft.rfftfreq(nsamp,d=1./5e3)
+            fund_ind = np.argmin(np.abs(freqs-3.))
+            good_inds = np.arange(1,num_harms+1)*fund_ind
+
+        # can only use as many harmonics as there are indices for
+        num_harms = np.min([len(good_inds), num_harms])
+
+        # get additional parameters 
+        params,param_inds = signal_model.get_params_and_inds()
+
+        positions = np.ones((len(bead_y),3))*1e-6
+        positions[:,0] *= bead_x
+        positions[:,1] *= bead_y
+        positions[:,2] *= bead_z
+
+        # for each value of the model parameter, append the array of force for all
+        # cantilever positions
+        forces = []
+        for ind in param_inds:
+            forces.append(signal_model.get_force_at_pos(positions,[ind]))
+        forces = np.array(forces)
+
+        # now do ffts of the forces along the cantilever drive to get the harmonics
+        force_ffts = np.fft.rfft(forces,axis=1)[:,good_inds,:]*2./nsamp
+        
+        self.template_ffts = force_ffts.swapaxes(1,2)
+        self.template_params = params
 
 
 
@@ -546,6 +622,7 @@ class AggregateData:
         self.cant_bins_x = np.array((0,))
         self.cant_bins_z = np.array((0,))
         self.bad_files = []
+        self.signal_models = None
 
 
     def get_file_list(self):
@@ -582,15 +659,23 @@ class AggregateData:
         self.__bin_by_config_data()
 
 
-    def load_file_data(self,num_cores=1,diagonalize_qpd=False,lightweight=True):
+    def load_file_data(self,num_cores=1,diagonalize_qpd=False,load_templates=False,harms=[],lightweight=True):
         '''
         Create a FileData object for each of the files in the file list and load
         in the relevant data for physics analysis.
         '''
         self.get_file_list()
+        if load_templates:
+            if self.signal_models is None:
+                print('Signal model not loaded! Load a signal model first. Aborting.')
+                return
+            signal_models = self.signal_models
+        else:
+            signal_models = [None]*len(self.diam_bead)
         file_data_objs = Parallel(n_jobs=num_cores)(delayed(self.process_file)\
-                                                    (file_path,diagonalize_qpd,lightweight) \
-                                                    for file_path in tqdm(self.file_list))
+                                                    (file_path,diagonalize_qpd,signal_models[self.bin_indices[i,0]],\
+                                                     self.p0_bead[self.bin_indices[i,1]],harms,lightweight) \
+                                                    for i,file_path in enumerate(tqdm(self.file_list)))
         # record which files are bad in the self.bin_indices array
         for i,file_data_obj in enumerate(file_data_objs):
             if file_data_obj.is_bad == True:
@@ -602,16 +687,38 @@ class AggregateData:
             print('Warning: {} files could not be loaded.'.format(len(self.bad_files)))
         print('Successfully loaded {} files.'.format(len(self.file_list)))
         self.__build_dict(lightweight=lightweight)
+
+
+    def load_yukawa_model(self,lambda_range=[1e-6,1e-5],num_lambdas=None):
+        '''
+        Load functions used to make Yukawa-modified gravity templates
+        '''
+        self.get_file_list()
+        signal_models = []
+        for diam in self.diam_bead:
+            if str(diam)[0]=='7':
+                signal_models.append(s.GravFuncs('/home/gautam/gravityData/7_6um-gbead_1um-unit-cells_master/'))
+            elif str(diam)[0]=='1':
+                signal_models.append(s.GravFuncs('/home/gautam/gravityData/10um-gbead_1um-unit-cells_master/'))
+            else:
+                print('Error: no signal model availabe for bead diameter {} um'.format(diam))
+                break
+            signal_models[-1].load_force_funcs(lambda_range=lambda_range,num_lambdas=num_lambdas)
+            print('Yukawa-modified gravity signal model loaded for {} um bead.'.format(diam))
+        self.signal_models = signal_models
         
 
-    def process_file(self,file_path,diagonalize_qpd=False,lightweight=True):
+    def process_file(self,file_path,diagonalize_qpd=False,\
+                     signal_model=None,p0_bead=None,harms=[],lightweight=True):
         '''
         Process data for an individual file and return the FileData object
         '''
         this_file = FileData(file_path)
         try:
-            this_file.load_data(diagonalize_qpd=diagonalize_qpd,lightweight=lightweight)
-        except:
+            this_file.load_data(diagonalize_qpd=diagonalize_qpd,signal_model=signal_model,\
+                                p0_bead=p0_bead,harms=harms,lightweight=lightweight)
+        except Exception as e:
+            print(e)
             this_file.is_bad = True
         return this_file
     
@@ -631,10 +738,14 @@ class AggregateData:
         mean_cant_pos = []
         freqs = []
         good_inds = []
+        cant_inds = []
+        fund_ind = []
         bead_ffts = []
         bead_ffts_full = []
         sideband_ffts = []
-        drive_fft = []
+        template_ffts = []
+        template_params = []
+        cant_fft = []
         quad_amps = []
         quad_phases = []
         for f in self.file_data_objs:
@@ -645,11 +756,15 @@ class AggregateData:
             quad_raw_data.append(f.quad_raw_data)
             mean_cant_pos.append(f.mean_cant_pos)
             good_inds.append(f.good_inds)
+            cant_inds.append(f.cant_inds)
+            fund_ind.append(f.fund_ind)
             freqs.append(f.freqs)
             bead_ffts.append(f.bead_ffts)
             bead_ffts_full.append(f.bead_ffts_full)
             sideband_ffts.append(f.sideband_ffts)
-            drive_fft.append(f.drive_fft)
+            template_ffts.append(f.template_ffts)
+            template_params.append(f.template_params)
+            cant_fft.append(f.cant_fft)
             quad_amps.append(f.quad_amps)
             quad_phases.append(f.quad_phases)
         agg_dict['dates'] = np.array(dates)
@@ -660,10 +775,14 @@ class AggregateData:
         agg_dict['mean_cant_pos'] = np.array(mean_cant_pos)
         agg_dict['freqs'] = np.array(freqs)
         agg_dict['good_inds'] = np.array(good_inds)
+        agg_dict['cant_inds'] = np.array(cant_inds)
+        agg_dict['fund_ind'] = np.array(fund_ind)
         agg_dict['bead_ffts'] = np.array(bead_ffts)
         agg_dict['bead_ffts_full'] = np.array(bead_ffts_full)
         agg_dict['sideband_ffts'] = np.array(sideband_ffts)
-        agg_dict['drive_fft'] = np.array(drive_fft)
+        agg_dict['template_ffts'] = np.array(template_ffts)
+        agg_dict['template_params'] = np.array(template_params)
+        agg_dict['cant_fft'] = np.array(cant_fft)
         agg_dict['quad_amps'] = np.array(quad_amps)
         agg_dict['quad_phases'] = np.array(quad_phases)
         self.agg_dict = agg_dict
@@ -678,7 +797,6 @@ class AggregateData:
         of the correct value in the p0_bead and diam_bead arrays. Should be called automatically when
         files are first loaded, but never by the user.
         '''
-
         # initialize the list of bin indices
         self.bin_indices = np.zeros((len(self.file_list),8)).astype(np.int32)
 
@@ -750,7 +868,6 @@ class AggregateData:
         self.file_list = list(np.delete(self.file_list,bad_file_indices,axis=0))
         self.file_data_objs = list(np.delete(self.file_data_objs,bad_file_indices,axis=0))
         self.bin_indices = np.delete(self.bin_indices,bad_file_indices,axis=0)
-        # success_fraction
 
 
     def bin_by_aux_data(self,cant_bin_widths=[1.,1.],seis_thresh=0.1,bias_bins=0):
@@ -935,7 +1052,7 @@ class AggregateData:
         return list(np.sort(slice_indices))
 
 
-    def diagonalize_qpd(self,fit_inds=None,peak_guess=[400.,370.]):
+    def diagonalize_qpd(self,fit_inds=None,peak_guess=[400.,370.],width_guess=[10.,10.],plot=False):
         '''
         Fit the two resonant peaks in x and y and diagonalize the QPD position sensing
         to remove cross-coupling from one into the other. Writes a matrix to the config file
@@ -947,7 +1064,8 @@ class AggregateData:
             fit_inds = np.array(range(len(self.file_list)))
 
         # use the guess of the peak location as a starting point for fitting
-        freq_ranges = [peak_guess[0]-5.,peak_guess[0]+5.,peak_guess[1]-5.,peak_guess[1]+5.]
+        freq_ranges = [peak_guess[0]-2*width_guess[0],peak_guess[0]+2*width_guess[0],\
+                       peak_guess[1]-2*width_guess[1],peak_guess[1]+2*width_guess[1]]
 
         # get corresponding indices
         freqs = self.agg_dict['freqs'][0]
@@ -955,45 +1073,73 @@ class AggregateData:
         for f in freq_ranges:
             freq_inds.append(np.argmin(np.abs(freqs-f)))
 
+        nsamp = self.agg_dict['quad_raw_data'][:,0,:].shape[1]
+
         # get mean of the ffts for the data used for the fit
-        mean_ffts_x = np.sqrt(np.mean(np.abs(self.agg_dict['quad_raw_data'][fit_inds][:,0,:])**2,axis=0))
-        mean_ffts_y = np.sqrt(np.mean(np.abs(self.agg_dict['quad_raw_data'][fit_inds][:,1,:])**2,axis=0))
+        mean_ffts_x = np.sqrt(np.mean(np.abs(np.fft.rfft(self.agg_dict['quad_raw_data'][fit_inds][:,0,:])*2./nsamp)**2,axis=0))
+        mean_ffts_y = np.sqrt(np.mean(np.abs(np.fft.rfft(self.agg_dict['quad_raw_data'][fit_inds][:,1,:])*2./nsamp)**2,axis=0))
 
         # resonant frequency in y is lower
         max_ind_x = freq_inds[0] + np.argmax(mean_ffts_x[freq_inds[0]:freq_inds[1]])
         max_ind_y = freq_inds[2] + np.argmax(mean_ffts_y[freq_inds[2]:freq_inds[3]])
 
         # fit a lorentzian to the peaks for better peak location finding
-        p_x,_ = curve_fit(lor,freqs[freq_inds[0]:freq_inds[1]],mean_ffts_y[freq_inds[0]:freq_inds[1]],\
-                          p0=[freqs[max_ind_x],10.,10.])
+        p_x,_ = curve_fit(lor,freqs[freq_inds[0]:freq_inds[1]],mean_ffts_x[freq_inds[0]:freq_inds[1]],\
+                          p0=[freqs[max_ind_x],width_guess[0],1e-3])
         max_ind_x = np.argmin(np.abs(freqs-p_x[0]))
         p_y,_ = curve_fit(lor,freqs[freq_inds[2]:freq_inds[3]],mean_ffts_y[freq_inds[2]:freq_inds[3]],\
-                          p0=[freqs[max_ind_y],10.,10.])
+                          p0=[freqs[max_ind_y],width_guess[1],1e-3])
         max_ind_y = np.argmin(np.abs(freqs-p_y[0]))
 
         # get the raw data from each quadrant
-        raw_qpd_1 = self.agg_dict['quad_amps'][fit_inds][:,0,:]
-        raw_qpd_2 = self.agg_dict['quad_amps'][fit_inds][:,1,:]
-        raw_qpd_3 = self.agg_dict['quad_amps'][fit_inds][:,2,:]
-        raw_qpd_4 = self.agg_dict['quad_amps'][fit_inds][:,3,:]
+        raw_qpd_1 = np.array(self.agg_dict['quad_amps'][fit_inds][:,0,:],dtype=np.float64)
+        raw_qpd_2 = np.array(self.agg_dict['quad_amps'][fit_inds][:,1,:],dtype=np.float64)
+        raw_qpd_3 = np.array(self.agg_dict['quad_amps'][fit_inds][:,2,:],dtype=np.float64)
+        raw_qpd_4 = np.array(self.agg_dict['quad_amps'][fit_inds][:,3,:],dtype=np.float64)
 
         # normalize by the total at each timestep
-        tot_at_time = raw_qpd_1 + raw_qpd_2 + raw_qpd_3 + raw_qpd_4
-        if tot_at_time.any()<0:
+        tot_at_time = np.sum(self.agg_dict['quad_amps'][fit_inds][:,:4,:],axis=1)
+        if (tot_at_time<0).any():
             print('Warning: potential overflow in sum of quad amps!')
         raw_qpd_1 = raw_qpd_1/tot_at_time
         raw_qpd_2 = raw_qpd_2/tot_at_time
         raw_qpd_3 = raw_qpd_3/tot_at_time
         raw_qpd_4 = raw_qpd_4/tot_at_time
 
-        # number of samples
-        nsamp = len(raw_qpd_1)
+        # matrix describing naive calculation of x and y from QPD data
+        naive_mat = np.array(((1.,1.,-1.,-1.),\
+                              (1.,-1.,1.,-1.)),dtype=np.complex128)
 
-        # take ffts
-        fft_qpd_1 = np.sqrt(np.mean(np.abs(np.fft.rfft(raw_qpd_1)*2./nsamp)**2,axis=0))
-        fft_qpd_2 = np.sqrt(np.mean(np.abs(np.fft.rfft(raw_qpd_2)*2./nsamp)**2,axis=0))
-        fft_qpd_3 = np.sqrt(np.mean(np.abs(np.fft.rfft(raw_qpd_3)*2./nsamp)**2,axis=0))
-        fft_qpd_4 = np.sqrt(np.mean(np.abs(np.fft.rfft(raw_qpd_4)*2./nsamp)**2,axis=0))
+        # get the ffts and phase shift them relative to quadrant 1
+        fft_qpd_1_all = np.fft.rfft(raw_qpd_1)
+        phase_qpd_1 = np.angle(fft_qpd_1_all)
+        fft_qpd_1 = np.mean(fft_qpd_1_all*np.exp(-1j*phase_qpd_1)*2./nsamp,axis=0)
+        fft_qpd_2 = np.mean(np.fft.rfft(raw_qpd_2)*np.exp(-1j*phase_qpd_1)*2./nsamp,axis=0)
+        fft_qpd_3 = np.mean(np.fft.rfft(raw_qpd_3)*np.exp(-1j*phase_qpd_1)*2./nsamp,axis=0)
+        fft_qpd_4 = np.mean(np.fft.rfft(raw_qpd_4)*np.exp(-1j*phase_qpd_1)*2./nsamp,axis=0)
+
+        if plot:
+            fig,ax = plt.subplots(2,1,sharex=True)
+            ax[0].semilogy(freqs,np.abs(fft_qpd_1),label='Q1')
+            ax[0].semilogy(freqs,np.abs(fft_qpd_2),label='Q2')
+            ax[0].semilogy(freqs,np.abs(fft_qpd_3),label='Q3')
+            ax[0].semilogy(freqs,np.abs(fft_qpd_4),label='Q4')
+            ax[1].plot(freqs,np.angle(fft_qpd_1)*180./np.pi,'.',ms='2',label='Q1')
+            ax[1].plot(freqs,np.angle(fft_qpd_2)*180./np.pi,'.',ms='2',label='Q2')
+            ax[1].plot(freqs,np.angle(fft_qpd_3)*180./np.pi,'.',ms='2',label='Q3')
+            ax[1].plot(freqs,np.angle(fft_qpd_4)*180./np.pi,'.',ms='2',label='Q4')
+            ax[0].set_title('Response of Individual Quadrants')
+            ax[1].set_xlabel('Frequency [Hz]')
+            ax[1].set_xlim([min(freq_ranges)-20,max(freq_ranges)+20])
+            ax[0].set_ylabel('ASD [1/$\sqrt{\mathrm{Hz}}$]')
+            ax[0].set_ylim([1e-7,1e-3 ])
+            ax[1].set_ylabel('Phase [degrees]')
+            ax[1].set_ylim([-200,200])
+            ax[1].set_yticks([-180,0,180])
+            ax[0].legend()
+            ax[0].grid(which='both')
+            ax[1].legend()
+            ax[1].grid(which='both')
 
         # bins on each side to average over for smoothing
         df = 5
@@ -1010,23 +1156,27 @@ class AggregateData:
         signal_mat = np.array(((qpd_1x,qpd_1y),
                                (qpd_2x,qpd_2y),
                                (qpd_3x,qpd_3y),
-                               (qpd_4x,qpd_4y),))
-
-        # matrix describing naive calculation of x and y from QPD data
-        naive_mat = np.array(((1,1,-1,-1),\
-                              (1,-1,1,-1),))
+                               (qpd_4x,qpd_4y)),dtype=np.complex128)
         
-        # get the response matrix, invert it, multiply to correct naive
-        # matrix, then rescale to give the correct amplitudes
+        # get the response matrix, take the real part, invert it, multiply to correct naive
+        # matrix, then rescale to give the correct total power in the resonance
         resp_mat = np.matmul(naive_mat,signal_mat)
-        scale_mat = np.diag((np.sum(resp_mat,axis=0)))
+        print('Fraction of power in imaginary parts to be discarded:')
+        print('x->x: {:.3f}, x->y: {:.3f}, y->x: {:.3f}, y->y: {:.3f}'\
+              .format(*np.square(np.imag(resp_mat)/np.abs(resp_mat)).flatten()))
+        resp_mat = np.real(resp_mat)
+        # only scale by the power in the out-of-phase parts
+        scale_mat = np.diag(np.sqrt(np.sum(np.square(resp_mat),axis=0)))
         resp_inv = np.linalg.inv(resp_mat)
-        diag_unscaled = np.matmul(resp_inv,naive_mat)
+        diag_unscaled = np.real(np.matmul(resp_inv,naive_mat))
         diag_mat = np.matmul(scale_mat,diag_unscaled)
 
+        if plot:
+            cross_coupling(self.agg_dict,diag_mat,p_x=p_x,p_y=p_y,plot_inds=fit_inds)
+            xy_on_qpd(diag_mat)
+
         if np.prod(np.sign(diag_mat[:,:2]))!=-1:
-            print('Warning: rows of the diagonalization matrix are not linearly independent!')
-            print('Not writing the matrix to the config file.')
+            print('Warning: both rows correspond to the same physical mode!')
             print(diag_mat)
             return
 
@@ -1034,7 +1184,191 @@ class AggregateData:
         print('Copy the following into the config.yaml files for the relevant datasets:')
         print('qpd_diag_mat: [[{:.8f},{:.8f},{:.8f},{:.8f}],[{:.8f},{:.8f},{:.8f},{:.8f}]]'\
               .format(*[i for i in diag_mat.flatten()]))
+        
+
+    def fit_alpha_all_files(self,file_indices=None):
+        '''
+        Find the best fit alpha to a dataset. Most of this should eventually be moved to
+        stats.py so that different likelihood functions can be called from here.
+        '''
+
+        if file_indices is None:
+            file_indices = np.array(range(self.agg_dict['freqs'].shape[0]))
+        
+        likelihood_coeffs = []
+        for i in file_indices:
+            likelihood_coeffs.append(self.fit_alpha_for_file(i))
+
+        return np.array(likelihood_coeffs)
+
+
+    def fit_alpha_for_file(self,file_index):
+        '''
+        Find the best fit alpha for a single file and return it. This function will be
+        called in parallel so that all files can be processed to produce a limit.
+        '''
+
+        lambdas = self.agg_dict['template_params'][file_index]
+        yuk_ffts = self.agg_dict['template_ffts'][file_index]
+        bead_ffts = self.agg_dict['bead_ffts'][file_index]
+        sideband_ffts = self.agg_dict['sideband_ffts'][file_index]
+        num_sb = int(sideband_ffts.shape[1]/bead_ffts.shape[1])
+        good_inds = self.agg_dict['good_inds'][file_index]
+
+        likelihood_coeffs = np.zeros((len(good_inds),3,len(lambdas),4),dtype=np.float128)
+        
+        for harm,_ in enumerate(good_inds):
+            for axis in [0,1,2]:
+
+                sb_fft_array = sideband_ffts[axis,harm*num_sb:(harm+1)*num_sb]
+                data_real = np.real(bead_ffts[axis,harm])
+                data_imag = np.imag(bead_ffts[axis,harm])
+                var = (1./(2.*num_sb))*np.sum(np.real(sb_fft_array)**2+np.imag(sb_fft_array)**2)
+
+                for lambda_ind,_ in enumerate(lambdas):
+                    
+                    model_real = np.real(yuk_ffts[lambda_ind,axis,harm])
+                    model_imag = np.imag(yuk_ffts[lambda_ind,axis,harm])
+
+                    # coefficients for negative log-likelihood quadratic function
+                    NLL_a = (model_real**2 + model_imag**2)/(2.*var)
+                    NLL_b = -(data_real*model_real + data_imag*model_imag)/var
+                    NLL_c = (data_real**2 + data_imag**2)/(2.*var)
+
+                    # maximum likelihood estimate for alpha
+                    alpha_mle = -NLL_b/(2.*NLL_a) #(data_real*model_real + data_imag*model_imag)/(model_real**2 + model_imag**2)
+                    
+                    likelihood_coeffs[harm,axis,lambda_ind,:] = np.array((NLL_a,NLL_b,NLL_c,alpha_mle))
+
+        return likelihood_coeffs
     
+
+    def combine_likelihoods_by_harm(self,likelihood_coeffs):
+        '''
+        Combine all likelihoods for individual files into likelihoods for
+        each harmonic. Returns an array containing likelihoods for each
+        harmonic for each axis.
+        '''
+
+        # for quadratic log-likelihoods, just add coefficients and calculate
+        # minimum analytically
+        coeffs_by_harm = np.sum(likelihood_coeffs,axis=0)
+        coeffs_by_harm[:,:,:,-1] = -coeffs_by_harm[:,:,:,1]/(2.*coeffs_by_harm[:,:,:,0])
+        return coeffs_by_harm
+        
+
+    def combine_likelihoods_by_axis(self,likelihood_coeffs):
+        '''
+        Comine all likelihoods for individual harmonics into likelihoods for
+        each axis. Returns an array containing combined likelihoods for each axis.
+        '''
+
+        # for quadratic log-likelihoods, just add coefficients and calculate
+        # minimum analytically
+        coeffs_by_harm = np.sum(likelihood_coeffs,axis=0)
+        coeffs_by_harm[:,:,-1] = -coeffs_by_harm[:,:,1]/(2.*coeffs_by_harm[:,:,0])
+        return coeffs_by_harm
+    
+
+    def test_stat_func(self,alpha,likelihood_coeffs):
+        '''
+        Returns the test statistic as a function of alpha given a single set of
+        likelihood coefficients. Works for positive or negative alpha depending on
+        the sign of the input.
+        '''
+
+        # determine if we're setting a limit for positive or negative alpha
+        signs = np.sign(alpha)
+        alpha_hat = likelihood_coeffs[-1]
+
+        # only keep likelihood terms with alpha hat of the correct sign
+        if np.all(signs*alpha_hat<0):
+            return np.zeros_like(alpha)
+        
+        # definition of the test statistic
+        test_stat = 2.*(quadratic(alpha,*likelihood_coeffs[:-1]) - quadratic(alpha_hat,*likelihood_coeffs[:-1]))
+        test_stat[np.abs(alpha)<np.abs(alpha_hat)] = 0
+
+        return test_stat
+    
+
+    def get_limit_analytic(self,likelihood_coeffs,confidence_level=0.95,alpha_sign=1):
+        '''
+        For test statistics that are half-quadratics, a limit can be found analytically.
+        This will give incorrect results for test statistics calculated by summing
+        multiple half-quadratic test statistics with different locations of the minimum.
+        '''
+        sign = np.float128(alpha_sign)
+        con_val = chi2(1).ppf(confidence_level)*0.5
+
+        a,b,_,alpha_hat = likelihood_coeffs
+        
+        # test statistic is twice the NLL
+        a *= 2.
+        b *= 2.
+        c = -a*alpha_hat**2 - b*alpha_hat - con_val
+
+        # only use likelihoods with alpha hat of the correct sign for the limit
+        if alpha_hat*sign<0:
+            return 0
+        
+        # get alpha that solves the half-quadratic equation
+        alpha = (-b+sign*np.sqrt(b**2.-4.*a*c))/(2.*a)
+
+        return alpha
+    
+
+    def get_limit_from_likelihoods(self,likelihood_coeffs,confidence_level=0.95,alpha_sign=1):
+        '''
+        Get an upper limit on alpha for an array of lambdas given the coefficients
+        of the quadratic negative log likleihood function. If multiple sets of likelihood
+        coefficients are given, a test statistic is computed for each independently and the
+        limit is computed from the sum of test statistics.
+        '''
+        # critical value of the test statistic ASSUMING WILKS'S THEOREM HOLDS
+        con_val = chi2(1).ppf(confidence_level)*0.5
+
+        # can either pass an array of likelihood functions, in which case test statistics will be
+        # computed for each and summed, or only a single likelihood function
+        if len(likelihood_coeffs.shape)==1:
+            likelihood_coeffs = likelihood_coeffs[np.newaxis,:]
+
+        # function to be minimized
+        limit_func = lambda alpha : np.sum([self.test_stat_func(alpha,likelihood_coeffs[i,:]) \
+                                            for i in range(likelihood_coeffs.shape[0])],axis=0) - con_val
+
+        # to make minimization easier we can approximate the solution with a few
+        # iterative searches through log-spaced values of alpha
+        alpha_low = 1e0
+        alpha_high = 1e15
+        sign = np.float128(alpha_sign)
+        for i in range(3):
+            alphas = sign*np.logspace(np.log10(alpha_low),np.log10(alpha_high),10000)
+            test_stats = limit_func(alphas)
+            test_stats[test_stats<0] = -1e12
+            alpha_ind = np.argmin(np.abs(test_stats))
+            alpha_low = sign*alphas[max(alpha_ind - 1,0)]
+            alpha_high = sign*alphas[min(alpha_ind + 1,len(alphas)-1)]
+            alpha_guess = alphas[alpha_ind]
+
+        # now minimize it properly
+        result = minimize(limit_func,alpha_guess,tol=1e-9)
+
+        # if the function value at the fit is too large, return nan 
+        if np.abs(result.fun) > 0.5*con_val:
+            return np.nan
+
+        return result.x[0]
+
+    
+    def get_limit_axis_or_harm(self,harm='all',axis='all'):
+        '''
+        Compute a limit for either an individual harmonic on a particular axis, all harmonics
+        on that axis, or for all harmonics for all axes.
+        '''
+
+
+
 
     def merge_objects(self,object_list):
         '''

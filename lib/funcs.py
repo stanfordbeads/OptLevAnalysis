@@ -149,3 +149,9 @@ def lor(x,x_0,gamma,A):
     Lorentzian function for fitting peaks.
     '''
     return A*gamma/((x-x_0)**2.+0.25*gamma**2.)
+
+def quadratic(x, a, b, c):
+    '''
+    Quadratic function in standard form
+    '''
+    return a*x**2 + b*x + c

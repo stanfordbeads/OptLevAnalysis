@@ -1,5 +1,6 @@
 import numpy as np
 from matplotlib import pyplot as plt
+from funcs import *
 
 def polar_plots(agg_dict,axis_ind=0):
     '''
@@ -19,7 +20,7 @@ def polar_plots(agg_dict,axis_ind=0):
     # loop through harmonics
     for h,ax in zip(range(len(harms)), axs.flatten()[:-1]):
         ffts = agg_dict['bead_ffts'][:,axis_ind,first_harm+h-1]
-        _,_,_,im = ax.hist2d(np.angle(ffts),np.abs(ffts),bins=(abins,rbins),cmap=cmap_polar,vmin=1,vmax=50)
+        _,_,_,im = ax.hist2d(np.angle(ffts),np.abs(ffts),bins=(abins,rbins),cmap=cmap_polar,vmin=1,vmax=20)
         """
         for jj, kk in enumerate([1e7, 1e8, 1e9]):
             ax.plot(np.angle(-1*templates['yukffts'][81, k, h])*np.ones(4),
@@ -46,3 +47,120 @@ def polar_plots(agg_dict,axis_ind=0):
     fig.suptitle(f'Measurements for the '+axes[axis_ind]+' axis', fontsize=32)
         
     return fig,axs
+
+def xy_on_qpd(qpd_diag_mat):
+    '''
+    Plot the x and y eigenmodes of the sphere overlaid on the QPD to see any
+    misalignment and non-orthogonality.
+    '''
+
+    # calculate QPD coords in bead eignespace
+    Q_trans_xy = np.matmul(qpd_diag_mat,np.diag(np.ones(4)))
+    Q_trans_xy[:,-2:] = Q_trans_xy[:,:-3:-1]
+
+    # calculate QPD axes in bead eigenspace
+    Q_hor_xy = np.matmul(qpd_diag_mat,(1.,1.,-1.,-1.))
+    Q_ver_xy = np.matmul(qpd_diag_mat,(1.,-1.,1.,-1.))
+
+    # calculate bead eigenmodes in physical space
+    xy_mode_phys = np.array(((qpd_diag_mat[1,0]-qpd_diag_mat[1,1],qpd_diag_mat[0,1]-qpd_diag_mat[0,0]),\
+                             (-qpd_diag_mat[1,0]-qpd_diag_mat[1,1],qpd_diag_mat[0,0]+qpd_diag_mat[0,1])))
+    x_mode_phys = xy_mode_phys[:,0]*10
+    y_mode_phys = xy_mode_phys[:,1]*10
+
+    # create the figure
+    fig,axs = plt.subplots(1,2,figsize=(10,5))
+    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
+    # Plotted axes are bead motion axes
+    ax1,ax2 = axs
+    ax1.set_xlim([-2,2])
+    ax1.set_ylim([-2,2])
+    ax1.set_yticks([-2,-1,0,1,2])
+    ax1.add_patch(plt.Polygon(Q_trans_xy.T,ls='-',lw=0.5,edgecolor='black',facecolor='lightgray'))
+    ax1.axvline(0,color=colors[0],label='Bead eigenmodes')
+    ax1.axhline(0,color=colors[0])
+    ax1.plot(np.array([-Q_hor_xy[0],0,Q_hor_xy[0]]),np.array([-Q_hor_xy[1],0,Q_hor_xy[1]]),color=colors[1],label='QPD axes')
+    ax1.plot(np.array([-Q_ver_xy[0],0,Q_ver_xy[0]]),np.array([-Q_ver_xy[1],0,Q_ver_xy[1]]),color=colors[1])
+    ax1.set_title('Bead eigenspace')
+    ax1.set_xlabel('Bead $x$ [arb]')
+    ax1.set_ylabel('Bead $y$ [arb]')
+    ax1.legend()
+    ax1.set_aspect('equal')
+
+    # Plotted axes are QPD space axes
+    ax2.set_xlim([-2,2])
+    ax2.set_ylim([-2,2])
+    ax2.set_yticks([-2,-1,0,1,2])
+    ax2.add_patch(plt.Polygon(np.array(((-1,-1,1,1),(-1,1,1,-1))).T,ls='-',lw=0.5,edgecolor='black',facecolor='lightgray'))
+    ax2.set_title('Physical space')
+    ax2.plot([-x_mode_phys[0],0,x_mode_phys[0]],[-x_mode_phys[1],0,x_mode_phys[1]],color=colors[0],label='Bead eigenmodes')
+    ax2.plot([-y_mode_phys[0],0,y_mode_phys[0]],[-y_mode_phys[1],0,y_mode_phys[1]],color=colors[0])
+    ax2.axvline(0,color=colors[1],label='QPD axes')
+    ax2.axhline(0,color=colors[1])
+    ax2.set_xlabel('QPD horizontal axis')
+    ax2.set_ylabel('QPD vertical axis')
+    ax2.legend()
+    ax2.set_aspect('equal')
+
+    return fig,axs
+
+def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None):
+    '''
+    Plot the cross-coupling before and after diagonalization.
+    '''
+    if plot_inds is None:
+        plot_inds = np.array(range(len(agg_dict['freqs'][0])))
+
+    # get the raw QPD data to plot
+    raw_qpd_1 = agg_dict['quad_amps'][plot_inds][:,0,:]
+    raw_qpd_2 = agg_dict['quad_amps'][plot_inds][:,1,:]
+    raw_qpd_3 = agg_dict['quad_amps'][plot_inds][:,2,:]
+    raw_qpd_4 = agg_dict['quad_amps'][plot_inds][:,3,:]
+    tot_vs_time = np.sum(agg_dict['quad_amps'][plot_inds][:,:4,:],axis=1)
+    raw_qpd_1 = raw_qpd_1/tot_vs_time
+    raw_qpd_2 = raw_qpd_2/tot_vs_time
+    raw_qpd_3 = raw_qpd_3/tot_vs_time
+    raw_qpd_4 = raw_qpd_4/tot_vs_time
+
+    freqs = agg_dict['freqs'][0]
+    nsamp = raw_qpd_1.shape[1]
+
+    signal_mat = np.array((raw_qpd_1,raw_qpd_2,raw_qpd_3,raw_qpd_4))
+
+    naive_mat = np.array(((1.,1.,-1.,-1.),\
+                          (1.,-1.,1.,-1.)))
+
+    # do the transformations from quadrants to x and y
+    new_resp = np.einsum('ij,jkl->ikl',qpd_diag_mat,signal_mat)
+    raw_resp = np.einsum('ij,jkl->ikl',naive_mat,signal_mat)
+
+    # pick out the new x and y coordinates
+    x_raw = raw_resp[0,:,:]
+    y_raw = raw_resp[1,:,:]
+    x_corr = new_resp[0,:,:]
+    y_corr = new_resp[1,:,:]
+
+    fft_x_raw = np.sqrt(np.mean(np.abs(np.fft.rfft(x_raw)*2./nsamp)**2,axis=0))
+    fft_y_raw = np.sqrt(np.mean(np.abs(np.fft.rfft(y_raw)*2./nsamp)**2,axis=0))
+    fft_x_corr = np.sqrt(np.mean(np.abs(np.fft.rfft(x_corr)*2./nsamp)**2,axis=0))
+    fft_y_corr = np.sqrt(np.mean(np.abs(np.fft.rfft(y_corr)*2./nsamp)**2,axis=0))
+
+    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    fig,ax = plt.subplots()
+    ax.semilogy(freqs,fft_x_raw,label='Naive $x$',color=colors[0],alpha=0.5)
+    ax.semilogy(freqs,fft_y_raw,label='Naive $y$',color=colors[1],alpha=0.5)
+    ax.semilogy(freqs,fft_x_corr,label='Diag. $x$',color=colors[0],ls=':',lw=2)
+    ax.semilogy(freqs,fft_y_corr,label='Diag. $y$',color=colors[1],ls=':',lw=2)
+    if (p_x is not None) and (p_y is not None):
+        ax.semilogy(freqs,lor(freqs,*p_x),label='Peak fit $x$',color=colors[2])
+        ax.semilogy(freqs,lor(freqs,*p_y),label='Peak fit $y$',color=colors[3])
+    ax.set_xlim([280,420])
+    ax.set_ylim([1e-6,1e-2])
+    ax.set_xlabel('Frequency [Hz]')
+    ax.set_ylabel('ASD [1/$\sqrt{\mathrm{Hz}}$]')
+    ax.set_title('QPD Diagonalization')
+    ax.grid(which='both')
+    ax.legend()
+
+    return fig,ax
