@@ -118,7 +118,7 @@ class FileData:
         except:
             dd['seismometer'] = np.zeros_like(dd['cant_data'][0])
             dd['laser_power'] = np.zeros_like(dd['cant_data'])
-            dd['PSPD'] = np.zeros_like(dd['cant_data'])
+            dd['pspd_data'] = np.zeros_like(dd['cant_data'])
         dd['timestamp_ns'] = os.stat(self.file_name).st_mtime*1e9
         dd['fsamp'] = f.attrs['Fsamp']/f.attrs['downsamp']
         dd['cantilever_axis'] = f.attrs['cantilever_axis']
