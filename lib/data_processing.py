@@ -41,14 +41,18 @@ class FileData:
         self.quad_phases = np.array(((),(),(),(),()))
         self.cant_pos_calibrated = np.array(((),(),()))
         self.mean_cant_pos = np.array(())
-        self.bead_force_calibrated = np.array(((),(),()))
+        self.qpd_force_calibrated = np.array(((),(),()))
+        self.pspd_force_calibrated = np.array(((),(),()))
         self.good_inds = np.array(())
         self.cant_inds = np.array(())
         self.drive_ind = 0
         self.fund_ind = 0
-        self.bead_ffts = np.array(((),(),()))
-        self.bead_ffts_full = np.array(((),(),()))
-        self.sideband_ffts = np.array(((),(),()))
+        self.qpd_ffts = np.array(((),(),()))
+        self.qpd_ffts_full = np.array(((),(),()))
+        self.qpd_sb_ffts = np.array(((),(),()))
+        self.pspd_ffts = np.array(((),(),()))
+        self.pspd_ffts_full = np.array(((),(),()))
+        self.pspd_sb_ffts = np.array(((),(),()))
         self.template_ffts = np.array(())
         self.template_params = np.array(())
         self.cant_fft = np.array(())
@@ -58,7 +62,7 @@ class FileData:
                                       (1.,-1.,1.,-1.)))
 
 
-    def load_data(self,tf_path=None,step_cal_drive_freq=71.0,max_freq=2500.,num_harmonics=10,\
+    def load_data(self,tf_path=None,cal_drive_freq=71.0,max_freq=2500.,num_harmonics=10,\
                   harms=[],width=0,noise_bins=10,diagonalize_qpd=False,\
                   signal_model=None,p0_bead=None,lightweight=False):
         '''
@@ -71,10 +75,16 @@ class FileData:
         if diagonalize_qpd:
             self.get_diag_mat()
         self.get_xyz_from_quad()
+        self.pspd_raw_data = self.data_dict['pspd_data']
         self.nsamp = len(self.times)
         self.freqs = np.fft.rfftfreq(self.nsamp, d=1.0/self.fsamp)
         self.calibrate_stage_position()
-        self.calibrate_bead_response(tf_path=tf_path,step_cal_drive_freq=step_cal_drive_freq,max_freq=max_freq)
+        self.qpd_force_calibrated = self.calibrate_bead_response(tf_path=tf_path,sensor='QPD',\
+                                                                 cal_drive_freq=cal_drive_freq,\
+                                                                 max_freq=max_freq)
+        self.pspd_force_calibrated = self.calibrate_bead_response(tf_path=tf_path,sensor='PSPD',\
+                                                                  cal_drive_freq=cal_drive_freq,\
+                                                                  max_freq=max_freq)
         self.get_boolean_cant_mask(num_harmonics=num_harmonics,harms=harms,width=width,max_freq=max_freq)
         self.get_ffts_and_noise(noise_bins=noise_bins)
         if signal_model is not None:
@@ -84,11 +94,13 @@ class FileData:
             self.data_dict = {}
             self.cant_raw_data = np.array(((),(),()))
             self.quad_raw_data = np.array(((),(),()))
+            self.pspd_raw_data = np.array(((),(),()))
             self.quad_amps = np.array(((),(),(),(),()))
             self.quad_phases = np.array(((),(),(),(),()))
             self.cant_pos_calibrated = np.array(((),(),()))
-            self.bead_force_calibrated = np.array(((),(),()))
-            self.bead_ffts_full = np.array(((),(),()))
+            self.qpd_force_calibrated = np.array(((),(),()))
+            self.pspd_force_calibrated = np.array(((),(),()))
+            self.qpd_ffts_full = np.array(((),(),()))
 
 
     def read_hdf5(self):
@@ -102,7 +114,7 @@ class FileData:
         try:
             dd['seismometer'] = np.array(f['seismometer'])
             dd['laser_power'] = np.array(f['laser_power'])
-            dd['PSPD'] = np.array(f['PSPD'])
+            dd['pspd_data'] = np.array(f['PSPD'])
         except:
             dd['seismometer'] = np.zeros_like(dd['cant_data'][0])
             dd['laser_power'] = np.zeros_like(dd['cant_data'])
@@ -231,7 +243,7 @@ class FileData:
         self.quad_raw_data = np.array([x.astype(np.float64)/quad_sum,y.astype(np.float64)/quad_sum,phases[4]])
     
 
-    def calibrate_bead_response(self,tf_path=None,step_cal_drive_freq=71.0,max_freq=2500.):
+    def calibrate_bead_response(self,tf_path=None,sensor='QPD',cal_drive_freq=71.0,max_freq=2500.):
         '''
         Apply correction using the transfer function to calibrate the
         x, y, and z responses.
@@ -240,13 +252,13 @@ class FileData:
         # for data from 2023 and later, the code will automatically find the transfer
         # function in the right format. For old data, specify the path manually
         if int(self.date) > 20230101:
-            Harr = self.tf_array_fitted(self.freqs,tf_path=tf_path,max_freq=max_freq)
+            Harr = self.tf_array_fitted(self.freqs,sensor,tf_path=tf_path,max_freq=max_freq)
         else:
             tf_path = '/data/new_trap_processed/calibrations/transfer_funcs/20200320.trans'
             Harr = self.tf_array_interpolated(self.freqs,tf_path)
 
         # force calibration factor at driven frequency
-        drive_freq_ind = np.argmin(np.abs(self.freqs - step_cal_drive_freq))
+        drive_freq_ind = np.argmin(np.abs(self.freqs - cal_drive_freq))
         response_matrix = Harr[drive_freq_ind,:,:]
         force_cal_factors = [0,0,0]
         for i in [0,1,2]:
@@ -255,8 +267,14 @@ class FileData:
             force_cal_factors[i] = np.abs(response_matrix[i,i])
         self.force_cal_factors = force_cal_factors
         
+        # get the raw data for the correct sensor
+        if sensor=='QPD':
+            raw_data = self.quad_raw_data
+        elif sensor=='PSPD':
+            raw_data = self.pspd_raw_data
+
         # calculate the DFT of the data, then correct using the transfer function matrix
-        data_fft = np.fft.rfft(self.quad_raw_data)
+        data_fft = np.fft.rfft(raw_data)
         # matrix multiplication with index contraction made explicit
         # 'kj,ki' = matrix multiplication along second two indices (the 3x3 part)
         # output has one free index (j). '->ji' = output uncontracted indices in this order
@@ -267,10 +285,10 @@ class FileData:
         calibrated_fft[nan_inds] = 0.0+0.0j
 
         # inverse DFT to get the now-calibrated position data
-        self.bead_force_calibrated = np.fft.irfft(calibrated_fft)
+        return np.fft.irfft(calibrated_fft)
 
 
-    def tf_array_fitted(self,freqs,tf_path=None,max_freq=2500.):
+    def tf_array_fitted(self,freqs,sensor,tf_path=None,max_freq=2500.):
         '''
         Get the transfer function array from the hdf5 file containing the fitted poles,
         zeros, and gain from the measured transfer functions along x, y, and z, and returns it.
@@ -284,12 +302,12 @@ class FileData:
         ### Compute TF at frequencies of interest. Appropriately inverts
         ### so we can map response -> drive
         Harr = np.zeros((len(freqs), 3, 3), dtype=complex)
-        Harr[:,0,0] = 1/signal.freqs_zpk(tf_file['fits/zXX'], 
-            tf_file['fits/pXX'], tf_file['fits/kXX']/tf_file.attrs['scaleFactors'][0], 2*np.pi*freqs)[1]
-        Harr[:,1,1] = 1/signal.freqs_zpk(tf_file['fits/zYY'], 
-            tf_file['fits/pYY'], tf_file['fits/kYY']/tf_file.attrs['scaleFactors'][1], 2*np.pi*freqs)[1]
-        Harr[:,2,2] = 1/signal.freqs_zpk(tf_file['fits/zZZ'], 
-            tf_file['fits/pZZ'], tf_file['fits/kZZ']/tf_file.attrs['scaleFactors'][2], 2*np.pi*freqs)[1]
+        Harr[:,0,0] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zXX'], tf_file['fits/'+sensor+'/pXX'], \
+                                         tf_file['fits/'+sensor+'/kXX']/tf_file.attrs['scaleFactors'][0], 2*np.pi*freqs)[1]
+        Harr[:,1,1] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zYY'], tf_file['fits/'+sensor+'/pYY'], \
+                                         tf_file['fits/'+sensor+'/kYY']/tf_file.attrs['scaleFactors'][1], 2*np.pi*freqs)[1]
+        Harr[:,2,2] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zZZ'], tf_file['fits/'+sensor+'/pZZ'], \
+                                         tf_file['fits/'+sensor+'/kZZ']/tf_file.attrs['scaleFactors'][2], 2*np.pi*freqs)[1]
         tf_file.close()
 
         # Only apply the TF to frequencies below some frequency
@@ -469,10 +487,15 @@ class FileData:
         if type(harm_freqs) == np.float64:
             harm_freqs = np.array([harm_freqs])
 
-        # initialize an array for the ffts of x, y, and z
-        bead_ffts_full = np.zeros((3, len(self.freqs)), dtype=np.complex128)
-        bead_ffts = np.zeros((3, len(self.good_inds)), dtype=np.complex128)
-        sideband_ffts = np.zeros((3, len(self.good_inds)*noise_bins), dtype=np.complex128)
+        # initialize an array for the qpd ffts of x, y, and z
+        qpd_ffts_full = np.zeros((3, len(self.freqs)), dtype=np.complex128)
+        qpd_ffts = np.zeros((3, len(self.good_inds)), dtype=np.complex128)
+        qpd_sb_ffts = np.zeros((3, len(self.good_inds)*noise_bins), dtype=np.complex128)
+
+        # initialize arrays for the pspd ffts of x, y, and z
+        pspd_ffts_full = np.zeros((3, len(self.freqs)), dtype=np.complex128)
+        pspd_ffts = np.zeros((3, len(self.good_inds)), dtype=np.complex128)
+        pspd_sb_ffts = np.zeros((3, len(self.good_inds)*noise_bins), dtype=np.complex128)
 
         # get the fft for the cantilever data along the driven axis
         cant_fft_full = np.fft.rfft(self.cant_pos_calibrated[self.drive_ind])
@@ -480,18 +503,22 @@ class FileData:
         # now select only the indices for the chosen number of drive harmonics
         cant_fft = cant_fft_full[self.cant_inds]
 
-        # get the QPD position data
-        data = self.bead_force_calibrated
+        # get the QPD & PSPD position data
+        data_qpd = self.qpd_force_calibrated
+        data_pspd = self.pspd_force_calibrated
 
         # loop through the axes
         for resp in [0,1,2]:
 
             # get the fft for the given axis and multiply by the calibration factor
-            bead_fft = np.fft.rfft(data[resp])
+            qpd_fft = np.fft.rfft(data_qpd[resp])
+            pspd_fft = np.fft.rfft(data_pspd[resp])
 
             # add the fft to the existing array, which was initialized with zeros
-            bead_ffts_full[resp] += bead_fft
-            bead_ffts[resp] += bead_fft[self.good_inds]
+            qpd_ffts_full[resp] += qpd_fft
+            qpd_ffts[resp] += qpd_fft[self.good_inds]
+            pspd_ffts_full[resp] += pspd_fft
+            pspd_ffts[resp] += pspd_fft[self.good_inds]
 
             # now create a list of some number of indices on either side of the harmonic
             sideband_inds = []
@@ -515,20 +542,27 @@ class FileData:
             sideband_inds.sort()
 
             # finally, add the data at these indices to the array for this axis
-            sideband_ffts[resp] += bead_fft[sideband_inds]
+            qpd_sb_ffts[resp] += qpd_fft[sideband_inds]
+            pspd_sb_ffts[resp] += pspd_fft[sideband_inds]
 
         # normalize the ffts
         norm_factor = 2./self.nsamp
-        bead_ffts_full *= norm_factor
-        bead_ffts *= norm_factor
+        qpd_ffts_full *= norm_factor
+        qpd_ffts *= norm_factor
+        pspd_ffts_full *= norm_factor
+        pspd_ffts *= norm_factor
         cant_fft *= norm_factor
-        sideband_ffts *= norm_factor
+        qpd_sb_ffts *= norm_factor
+        pspd_sb_ffts *= norm_factor
 
         # save the ffts as class attributes
-        self.bead_ffts_full = bead_ffts_full
-        self.bead_ffts = bead_ffts
+        self.qpd_ffts_full = qpd_ffts_full
+        self.qpd_ffts = qpd_ffts
+        self.pspd_ffts_full = pspd_ffts_full
+        self.pspd_ffts = pspd_ffts
         self.cant_fft = cant_fft
-        self.sideband_ffts = sideband_ffts
+        self.qpd_sb_ffts = qpd_sb_ffts
+        self.pspd_sb_ffts = pspd_sb_ffts
 
 
     def make_templates(self,signal_model,p0_bead,cant_vec=None,num_harms=10):
@@ -551,8 +585,10 @@ class FileData:
         nsamp = self.nsamp
         if len(good_inds)==0:
             nsamp = int(5e4)
-            freqs = np.fft.rfftfreq(nsamp,d=1./5e3)
-            fund_ind = np.argmin(np.abs(freqs-3.))
+            fsamp = 5e3
+            drive_freq = 3.
+            freqs = np.fft.rfftfreq(nsamp,d=1./fsamp)
+            fund_ind = np.argmin(np.abs(freqs-drive_freq))
             good_inds = np.arange(1,num_harms+1)*fund_ind
 
         # can only use as many harmonics as there are indices for
@@ -740,9 +776,12 @@ class AggregateData:
         good_inds = []
         cant_inds = []
         fund_ind = []
-        bead_ffts = []
-        bead_ffts_full = []
-        sideband_ffts = []
+        qpd_ffts = []
+        qpd_ffts_full = []
+        qpd_sb_ffts = []
+        pspd_ffts = []
+        pspd_ffts_full = []
+        pspd_sb_ffts = []
         template_ffts = []
         template_params = []
         cant_fft = []
@@ -759,9 +798,12 @@ class AggregateData:
             cant_inds.append(f.cant_inds)
             fund_ind.append(f.fund_ind)
             freqs.append(f.freqs)
-            bead_ffts.append(f.bead_ffts)
-            bead_ffts_full.append(f.bead_ffts_full)
-            sideband_ffts.append(f.sideband_ffts)
+            qpd_ffts.append(f.qpd_ffts)
+            qpd_ffts_full.append(f.qpd_ffts_full)
+            qpd_sb_ffts.append(f.qpd_sb_ffts)
+            pspd_ffts.append(f.pspd_ffts)
+            pspd_ffts_full.append(f.pspd_ffts_full)
+            pspd_sb_ffts.append(f.pspd_sb_ffts)
             template_ffts.append(f.template_ffts)
             template_params.append(f.template_params)
             cant_fft.append(f.cant_fft)
@@ -777,9 +819,12 @@ class AggregateData:
         agg_dict['good_inds'] = np.array(good_inds)
         agg_dict['cant_inds'] = np.array(cant_inds)
         agg_dict['fund_ind'] = np.array(fund_ind)
-        agg_dict['bead_ffts'] = np.array(bead_ffts)
-        agg_dict['bead_ffts_full'] = np.array(bead_ffts_full)
-        agg_dict['sideband_ffts'] = np.array(sideband_ffts)
+        agg_dict['qpd_ffts'] = np.array(qpd_ffts)
+        agg_dict['qpd_ffts_full'] = np.array(qpd_ffts_full)
+        agg_dict['qpd_sb_ffts'] = np.array(qpd_sb_ffts)
+        agg_dict['pspd_ffts'] = np.array(pspd_ffts)
+        agg_dict['pspd_ffts_full'] = np.array(pspd_ffts_full)
+        agg_dict['pspd_sb_ffts'] = np.array(pspd_sb_ffts)
         agg_dict['template_ffts'] = np.array(template_ffts)
         agg_dict['template_params'] = np.array(template_params)
         agg_dict['cant_fft'] = np.array(cant_fft)
@@ -1202,7 +1247,7 @@ class AggregateData:
         return np.array(likelihood_coeffs)
 
 
-    def fit_alpha_for_file(self,file_index):
+    def fit_alpha_for_file(self,file_index,sensor='qpd'):
         '''
         Find the best fit alpha for a single file and return it. This function will be
         called in parallel so that all files can be processed to produce a limit.
@@ -1210,9 +1255,9 @@ class AggregateData:
 
         lambdas = self.agg_dict['template_params'][file_index]
         yuk_ffts = self.agg_dict['template_ffts'][file_index]
-        bead_ffts = self.agg_dict['bead_ffts'][file_index]
-        sideband_ffts = self.agg_dict['sideband_ffts'][file_index]
-        num_sb = int(sideband_ffts.shape[1]/bead_ffts.shape[1])
+        bead_ffts = self.agg_dict[sensor+'_ffts'][file_index]
+        bead_sb_ffts = self.agg_dict[sensor+'_sb_ffts'][file_index]
+        num_sb = int(bead_sb_ffts.shape[1]/bead_ffts.shape[1])
         good_inds = self.agg_dict['good_inds'][file_index]
 
         likelihood_coeffs = np.zeros((len(good_inds),3,len(lambdas),4),dtype=np.float128)
@@ -1220,7 +1265,7 @@ class AggregateData:
         for harm,_ in enumerate(good_inds):
             for axis in [0,1,2]:
 
-                sb_fft_array = sideband_ffts[axis,harm*num_sb:(harm+1)*num_sb]
+                sb_fft_array = bead_sb_ffts[axis,harm*num_sb:(harm+1)*num_sb]
                 data_real = np.real(bead_ffts[axis,harm])
                 data_imag = np.imag(bead_ffts[axis,harm])
                 var = (1./(2.*num_sb))*np.sum(np.real(sb_fft_array)**2+np.imag(sb_fft_array)**2)
