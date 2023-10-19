@@ -4,14 +4,16 @@ import os
 import re
 import pickle
 import yaml
+import time
 import scipy.interpolate as interp
 import scipy.signal as signal
 from scipy.optimize import curve_fit, minimize
-from scipy.stats import chi2
+from scipy.stats import chi2,norm
 from tqdm import tqdm
 from joblib import Parallel, delayed
 from itertools import product
 from copy import deepcopy
+import subprocess
 from funcs import *
 from plotting import *
 from stats import *
@@ -53,10 +55,14 @@ class FileData:
         self.pspd_ffts = np.array(((),(),()))
         self.pspd_ffts_full = np.array(((),(),()))
         self.pspd_sb_ffts = np.array(((),(),()))
+        self.cross_asds = np.array(((),(),()))
+        self.cross_asds_full = np.array(((),(),()))
+        self.cross_sb_asds = np.array(((),(),()))
         self.template_ffts = np.array(())
         self.template_params = np.array(())
         self.cant_fft = np.array(())
-        self.force_cal_factors = np.array([0,0,0])
+        self.force_cal_factors_qpd = np.array([0,0,0])
+        self.force_cal_factors_pspd = np.array([0,0,0])
         self.is_bad = False
         self.qpd_diag_mat = np.array(((1.,1.,-1.,-1.),\
                                       (1.,-1.,1.,-1.)))
@@ -64,7 +70,7 @@ class FileData:
 
     def load_data(self,tf_path=None,cal_drive_freq=71.0,max_freq=2500.,num_harmonics=10,\
                   harms=[],width=0,noise_bins=10,diagonalize_qpd=False,\
-                  signal_model=None,p0_bead=None,lightweight=False):
+                  signal_model=None,p0_bead=None,lightweight=False,no_tf=False):
         '''
         Applies calibrations to the cantilever data and QPD data, then gets FFTs for both.
         '''
@@ -75,16 +81,18 @@ class FileData:
         if diagonalize_qpd:
             self.get_diag_mat()
         self.get_xyz_from_quad()
+        self.get_signal_likeness()
         self.pspd_raw_data = self.data_dict['pspd_data']
         self.nsamp = len(self.times)
         self.freqs = np.fft.rfftfreq(self.nsamp, d=1.0/self.fsamp)
         self.calibrate_stage_position()
         self.qpd_force_calibrated = self.calibrate_bead_response(tf_path=tf_path,sensor='QPD',\
                                                                  cal_drive_freq=cal_drive_freq,\
-                                                                 max_freq=max_freq)
-        self.pspd_force_calibrated = self.calibrate_bead_response(tf_path=tf_path,sensor='PSPD',\
-                                                                  cal_drive_freq=cal_drive_freq,\
-                                                                  max_freq=max_freq)
+                                                                 max_freq=max_freq,no_tf=no_tf)
+        self.pspd_force_calibrated= self.calibrate_bead_response(tf_path=tf_path,sensor='PSPD',\
+                                                                 cal_drive_freq=cal_drive_freq,\
+                                                                 max_freq=max_freq,no_tf=no_tf)
+        self.pspd_force_calibrated[2,:] = np.copy(self.qpd_force_calibrated[2,:])
         self.get_boolean_cant_mask(num_harmonics=num_harmonics,harms=harms,width=width,max_freq=max_freq)
         self.get_ffts_and_noise(noise_bins=noise_bins)
         if signal_model is not None:
@@ -100,7 +108,6 @@ class FileData:
             self.cant_pos_calibrated = np.array(((),(),()))
             self.qpd_force_calibrated = np.array(((),(),()))
             self.pspd_force_calibrated = np.array(((),(),()))
-            self.qpd_ffts_full = np.array(((),(),()))
 
 
     def read_hdf5(self):
@@ -121,9 +128,14 @@ class FileData:
             dd['pspd_data'] = np.zeros_like(dd['cant_data'])
         dd['timestamp_ns'] = os.stat(self.file_name).st_mtime*1e9
         dd['fsamp'] = f.attrs['Fsamp']/f.attrs['downsamp']
-        dd['cantilever_axis'] = f.attrs['cantilever_axis']
-        dd['cantilever_freq'] = f.attrs['cantilever_freq']
-        cant_voltages = list(f['cantilever_settings'])
+        try:
+            dd['cantilever_axis'] = f.attrs['cantilever_axis']
+            dd['cantilever_freq'] = f.attrs['cantilever_freq']
+            cant_voltages = list(f['cantilever_settings'])
+        except:
+            dd['cantilever_axis'] = 0
+            dd['cantilever_freq'] = 0
+            cant_voltages = np.zeros(6)
         dd['cantilever_DC'] = [cant_voltages[i] for i in [0,2,4]]
         dd['cantilever_amp'] = [cant_voltages[i] for i in [1,3,5]]
         self.data_dict = dd
@@ -191,6 +203,11 @@ class FileData:
             amps[i] = amps[i][:min_length]
             phases[i] = phases[i][:min_length]
 
+        # check for scrambling of timestamps, and raise an exception if found
+        timesteps = np.diff(quad_times)*1e-9
+        if np.sum(timesteps > 2.0/self.fsamp):
+            raise Exception('Error: timestamps scrambed in '+self.file_name)
+
         # store the raw QPD data so it can be used to diagonalize the x/y responses
         self.quad_amps = np.array(amps)
         self.quad_phases = np.array(phases)
@@ -206,6 +223,10 @@ class FileData:
 
         # get the cantilever data from the data dict
         self.cant_raw_data = self.data_dict['cant_data']
+
+        # may want to look at datasets with no cant_data
+        if not len(self.cant_raw_data):
+            self.cant_raw_data = np.zeros_like(self.quad_raw_data)
 
         # could eventually move this elsewhere and reference a config file instead of hard-coded params
         cant_cal_func = lambda x: list(np.repeat([[50.418,50.418,10.0]],self.cant_raw_data.shape[1],axis=0).T*x\
@@ -241,37 +262,81 @@ class FileData:
 
         # set object attribute with a numpy array of x,y,z
         self.quad_raw_data = np.array([x.astype(np.float64)/quad_sum,y.astype(np.float64)/quad_sum,phases[4]])
-    
 
-    def calibrate_bead_response(self,tf_path=None,sensor='QPD',cal_drive_freq=71.0,max_freq=2500.):
+
+    def get_signal_likeness(self):
+        '''
+        Try selecting only opposite-phase motion of x, y, and z to filter scattered light backgrounds.
+        '''
+
+        _,amps,_ = self.extract_quad()
+
+        # ffts of each quadrant
+        Q1 = np.fft.rfft(amps[0])
+        Q2 = np.fft.rfft(amps[1])
+        Q3 = np.fft.rfft(amps[2])
+        Q4 = np.fft.rfft(amps[3])
+
+        # all phases relative to quadrant 1
+        rot = np.exp(-1j*np.angle(Q1))
+        Q1 *= rot
+        Q2 *= rot
+        Q3 *= rot
+        Q4 *= rot
+
+        # signal-likeness parameter
+        signal_likeness_x = np.abs((Q1 + Q2 - Q3 - Q4)/(Q1 + Q2 + Q3 + Q4))
+        signal_likeness_y = np.abs((Q1 - Q2 + Q3 - Q4)/(Q1 + Q2 + Q3 + Q4))
+
+        # values >1 are maximally signal-like
+        signal_likeness_x[signal_likeness_x>1] = 1
+        signal_likeness_y[signal_likeness_y>1] = 1
+
+        # set object attribute with a numpy array of x and y
+        self.signal_likeness = np.array([signal_likeness_x,signal_likeness_y])
+
+
+    def calibrate_bead_response(self,tf_path=None,sensor='QPD',cal_drive_freq=71.0,\
+                                max_freq=2500.,no_tf=False):
         '''
         Apply correction using the transfer function to calibrate the
         x, y, and z responses.
         '''
 
-        # for data from 2023 and later, the code will automatically find the transfer
-        # function in the right format. For old data, specify the path manually
-        if int(self.date) > 20230101:
-            Harr = self.tf_array_fitted(self.freqs,sensor,tf_path=tf_path,max_freq=max_freq)
-        else:
-            tf_path = '/data/new_trap_processed/calibrations/transfer_funcs/20200320.trans'
-            Harr = self.tf_array_interpolated(self.freqs,tf_path)
+        if not no_tf:
+            # for data from 2023 and later, the code will automatically find the transfer
+            # function in the right format. For old data, specify the path manually
+            if int(self.date) > 20230101:
+                Harr = self.tf_array_fitted(self.freqs,sensor,tf_path=tf_path,max_freq=max_freq)
+            else:
+                tf_path = '/data/new_trap_processed/calibrations/transfer_funcs/20200320.trans'
+                Harr = self.tf_array_interpolated(self.freqs,tf_path)
 
-        # force calibration factor at driven frequency
-        drive_freq_ind = np.argmin(np.abs(self.freqs - cal_drive_freq))
-        response_matrix = Harr[drive_freq_ind,:,:]
-        force_cal_factors = [0,0,0]
-        for i in [0,1,2]:
-            # assume the response is purely diagonal, and take from it the x, y, and z
-            # force calibration factors
-            force_cal_factors[i] = np.abs(response_matrix[i,i])
-        self.force_cal_factors = force_cal_factors
+            # force calibration factor at driven frequency
+            drive_freq_ind = np.argmin(np.abs(self.freqs - cal_drive_freq))
+            response_matrix = Harr[drive_freq_ind,:,:]
+            force_cal_factors = [0,0,0]
+            for i in [0,1,2]:
+                # assume the response is purely diagonal, and take from it the x, y, and z
+                # force calibration factors
+                force_cal_factors[i] = np.abs(response_matrix[i,i])
+
+        else:
+            Harr = np.zeros((len(self.freqs), 3, 3))
+            force_cal_factors = np.ones(3)
+            for i in range(3):
+                for j in range(3):
+                    if i==j:
+                        # scale all frequencies by a constant
+                        Harr[:,i,j] = force_cal_factors[i]
         
         # get the raw data for the correct sensor
         if sensor=='QPD':
             raw_data = self.quad_raw_data
+            self.force_cal_factors_qpd = force_cal_factors
         elif sensor=='PSPD':
             raw_data = self.pspd_raw_data
+            self.force_cal_factors_pspd = force_cal_factors
 
         # calculate the DFT of the data, then correct using the transfer function matrix
         data_fft = np.fft.rfft(raw_data)
@@ -285,7 +350,9 @@ class FileData:
         calibrated_fft[nan_inds] = 0.0+0.0j
 
         # inverse DFT to get the now-calibrated position data
-        return np.fft.irfft(calibrated_fft)
+        bead_force_cal = np.fft.irfft(calibrated_fft)
+
+        return bead_force_cal
 
 
     def tf_array_fitted(self,freqs,sensor,tf_path=None,max_freq=2500.):
@@ -303,11 +370,11 @@ class FileData:
         ### so we can map response -> drive
         Harr = np.zeros((len(freqs), 3, 3), dtype=complex)
         Harr[:,0,0] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zXX'], tf_file['fits/'+sensor+'/pXX'], \
-                                         tf_file['fits/'+sensor+'/kXX']/tf_file.attrs['scaleFactors'][0], 2*np.pi*freqs)[1]
+                                         tf_file['fits/'+sensor+'/kXX']/tf_file.attrs['scaleFactors_'+sensor][0], 2*np.pi*freqs)[1]
         Harr[:,1,1] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zYY'], tf_file['fits/'+sensor+'/pYY'], \
-                                         tf_file['fits/'+sensor+'/kYY']/tf_file.attrs['scaleFactors'][1], 2*np.pi*freqs)[1]
+                                         tf_file['fits/'+sensor+'/kYY']/tf_file.attrs['scaleFactors_'+sensor][1], 2*np.pi*freqs)[1]
         Harr[:,2,2] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zZZ'], tf_file['fits/'+sensor+'/pZZ'], \
-                                         tf_file['fits/'+sensor+'/kZZ']/tf_file.attrs['scaleFactors'][2], 2*np.pi*freqs)[1]
+                                         tf_file['fits/'+sensor+'/kZZ']/tf_file.attrs['scaleFactors_'+sensor][2], 2*np.pi*freqs)[1]
         tf_file.close()
 
         # Only apply the TF to frequencies below some frequency
@@ -497,6 +564,11 @@ class FileData:
         pspd_ffts = np.zeros((3, len(self.good_inds)), dtype=np.complex128)
         pspd_sb_ffts = np.zeros((3, len(self.good_inds)*noise_bins), dtype=np.complex128)
 
+        # initialize arrays for the pspd ffts of x, y, and z
+        cross_asds_full = np.zeros((3, len(self.freqs)), dtype=np.complex128)
+        cross_asds = np.zeros((3, len(self.good_inds)), dtype=np.complex128)
+        cross_sb_asds = np.zeros((3, len(self.good_inds)*noise_bins), dtype=np.complex128)
+
         # get the fft for the cantilever data along the driven axis
         cant_fft_full = np.fft.rfft(self.cant_pos_calibrated[self.drive_ind])
 
@@ -513,12 +585,17 @@ class FileData:
             # get the fft for the given axis and multiply by the calibration factor
             qpd_fft = np.fft.rfft(data_qpd[resp])
             pspd_fft = np.fft.rfft(data_pspd[resp])
+            _,cross_psd = signal.csd(data_pspd[resp],data_qpd[resp],window='boxcar',\
+                                     fs=self.fsamp,nperseg=self.nsamp)
+            cross_asd = np.sqrt(np.abs(cross_psd))*np.exp(1j*(np.angle(cross_psd)-np.angle(pspd_fft)))
 
             # add the fft to the existing array, which was initialized with zeros
             qpd_ffts_full[resp] += qpd_fft
             qpd_ffts[resp] += qpd_fft[self.good_inds]
             pspd_ffts_full[resp] += pspd_fft
             pspd_ffts[resp] += pspd_fft[self.good_inds]
+            cross_asds_full[resp] += cross_asd
+            cross_asds[resp] += cross_asd[self.good_inds]
 
             # now create a list of some number of indices on either side of the harmonic
             sideband_inds = []
@@ -544,6 +621,7 @@ class FileData:
             # finally, add the data at these indices to the array for this axis
             qpd_sb_ffts[resp] += qpd_fft[sideband_inds]
             pspd_sb_ffts[resp] += pspd_fft[sideband_inds]
+            cross_sb_asds[resp] += cross_asd[sideband_inds]
 
         # normalize the ffts
         norm_factor = 2./self.nsamp
@@ -560,9 +638,12 @@ class FileData:
         self.qpd_ffts = qpd_ffts
         self.pspd_ffts_full = pspd_ffts_full
         self.pspd_ffts = pspd_ffts
+        self.cross_asds_full = cross_asds_full
+        self.cross_asds = cross_asds
         self.cant_fft = cant_fft
         self.qpd_sb_ffts = qpd_sb_ffts
         self.pspd_sb_ffts = pspd_sb_ffts
+        self.cross_sb_asds = cross_sb_asds
 
 
     def make_templates(self,signal_model,p0_bead,cant_vec=None,num_harms=10):
@@ -627,7 +708,7 @@ class AggregateData:
         directory, add the directory to the list multiple times with the corresponding prefixes
         in the file_prefixes argument.
         '''
-        self.data_dirs = data_dirs
+        self.data_dirs = np.array(data_dirs)
         if len(file_prefixes):
             if len(file_prefixes) != len(data_dirs):
                 raise Exception('Error: length of data_dirs and file_prefixes do not match.')
@@ -638,17 +719,16 @@ class AggregateData:
                 raise Exception('Error: length of data_dirs and descrips do not match.')
         else:
             descrips = ['']*len(data_dirs)
-        self.file_prefixes = file_prefixes
+        self.file_prefixes = np.array(file_prefixes)
         self.descrips = np.array(descrips)
         if type(num_to_load) is not list:
-            self.num_to_load = [num_to_load]*len(data_dirs)
+            num_to_load = [num_to_load]*len(data_dirs)
         else:
             if len(num_to_load) != len(data_dirs):
                 raise Exception('Error: length of data_dirs and num_to_load do not match.')
-            else:
-                self.num_to_load = num_to_load
-        self.num_files = []
-        self.file_list = []
+        self.num_to_load = np.array(num_to_load)
+        self.num_files = np.array([])
+        self.file_list = np.array([])
         self.p0_bead = np.array(())
         self.diam_bead = np.array(())
         self.seis_thresh = 1e3
@@ -657,11 +737,11 @@ class AggregateData:
         self.agg_dict = {}
         self.cant_bins_x = np.array((0,))
         self.cant_bins_z = np.array((0,))
-        self.bad_files = []
+        self.bad_files = np.array([])
         self.signal_models = None
 
 
-    def get_file_list(self):
+    def get_file_list(self,no_config=False):
         '''
         Get a list of all file paths given the directories and prefixes specified
         when the object was created and set it as an object attribute.
@@ -672,35 +752,39 @@ class AggregateData:
         diam_bead = []
         for i,dir in enumerate(self.data_dirs):
             # get the bead position wrt the stage for each directory
-            try:
-                with open(dir+'/config.yaml','r') as infile:
-                    config = yaml.safe_load(infile)
-                    p0_bead.append(config['p0_bead'])
-                    diam_bead.append(config['diam_bead'])
-            except FileNotFoundError:
-                raise Exception('Error: config file not found in directory.')
-            files = os.listdir(dir)
+            if not no_config:
+                try:
+                    with open(dir+'/config.yaml','r') as infile:
+                        config = yaml.safe_load(infile)
+                        p0_bead.append(config['p0_bead'])
+                        diam_bead.append(config['diam_bead'])
+                except FileNotFoundError:
+                    raise Exception('Error: config file not found in directory.')
+            else:
+                p0_bead.append([0,0,0])
+                diam_bead.append(0)
+            files = os.listdir(str(dir))
             # only add files, not folders, and ensure they end with .h5 and have the correct prefix
-            files = [dir+'/'+f for f in files if (os.path.isfile(dir+'/'+f) and \
+            files = [str(dir)+'/'+f for f in files if (os.path.isfile(str(dir)+'/'+f) and \
                                                   (self.file_prefixes[i] in f and f.endswith('.h5')))]
             files.sort(key=get_file_number)
             num_to_load = min(self.num_to_load[i],len(files))
             file_list += files[:num_to_load]
             # keep track of the number of files loaded for each directory
             num_files.append(num_to_load)
-        self.file_list = file_list
+        self.file_list = np.array(file_list)
         self.p0_bead = np.array(p0_bead)
         self.diam_bead = np.array(diam_bead)
-        self.num_files = num_files
+        self.num_files = np.array(num_files)
         self.__bin_by_config_data()
 
 
-    def load_file_data(self,num_cores=1,diagonalize_qpd=False,load_templates=False,harms=[],lightweight=True):
+    def load_file_data(self,num_cores=1,diagonalize_qpd=False,load_templates=False,harms=[],\
+                       no_tf=False,no_config=False,lightweight=True):
         '''
         Create a FileData object for each of the files in the file list and load
         in the relevant data for physics analysis.
         '''
-        self.get_file_list()
         if load_templates:
             if self.signal_models is None:
                 print('Signal model not loaded! Load a signal model first. Aborting.')
@@ -708,9 +792,11 @@ class AggregateData:
             signal_models = self.signal_models
         else:
             signal_models = [None]*len(self.diam_bead)
+            self.get_file_list(no_config=no_config)
+        print('Loading data from {} files...'.format(len(self.file_list)))
         file_data_objs = Parallel(n_jobs=num_cores)(delayed(self.process_file)\
                                                     (file_path,diagonalize_qpd,signal_models[self.bin_indices[i,0]],\
-                                                     self.p0_bead[self.bin_indices[i,1]],harms,lightweight) \
+                                                     self.p0_bead[self.bin_indices[i,1]],harms,no_tf,lightweight) \
                                                     for i,file_path in enumerate(tqdm(self.file_list)))
         # record which files are bad in the self.bin_indices array
         for i,file_data_obj in enumerate(file_data_objs):
@@ -745,16 +831,15 @@ class AggregateData:
         
 
     def process_file(self,file_path,diagonalize_qpd=False,\
-                     signal_model=None,p0_bead=None,harms=[],lightweight=True):
+                     signal_model=None,p0_bead=None,harms=[],no_tf=False,lightweight=True):
         '''
         Process data for an individual file and return the FileData object
         '''
         this_file = FileData(file_path)
         try:
             this_file.load_data(diagonalize_qpd=diagonalize_qpd,signal_model=signal_model,\
-                                p0_bead=p0_bead,harms=harms,lightweight=lightweight)
+                                p0_bead=p0_bead,harms=harms,no_tf=no_tf,lightweight=lightweight)
         except Exception as e:
-            print(e)
             this_file.is_bad = True
         return this_file
     
@@ -766,7 +851,7 @@ class AggregateData:
         '''
         print('Building dictionary of file data...')
         agg_dict = {}
-        dates = []
+        #dates = []
         times = []
         seismometer = []
         cant_raw_data = []
@@ -782,13 +867,17 @@ class AggregateData:
         pspd_ffts = []
         pspd_ffts_full = []
         pspd_sb_ffts = []
+        cross_asds_full = []
+        cross_asds = []
+        cross_sb_asds = []
         template_ffts = []
         template_params = []
         cant_fft = []
         quad_amps = []
         quad_phases = []
+        sig_likes = []
         for f in self.file_data_objs:
-            dates.append(f.date)
+            #dates.append(f.date)
             times.append(f.times)
             seismometer.append(f.seismometer)
             cant_raw_data.append(f.cant_raw_data)
@@ -804,12 +893,16 @@ class AggregateData:
             pspd_ffts.append(f.pspd_ffts)
             pspd_ffts_full.append(f.pspd_ffts_full)
             pspd_sb_ffts.append(f.pspd_sb_ffts)
+            cross_asds.append(f.cross_asds)
+            cross_asds_full.append(f.cross_asds_full)
+            cross_sb_asds.append(f.cross_sb_asds)
             template_ffts.append(f.template_ffts)
             template_params.append(f.template_params)
             cant_fft.append(f.cant_fft)
             quad_amps.append(f.quad_amps)
             quad_phases.append(f.quad_phases)
-        agg_dict['dates'] = np.array(dates)
+            sig_likes.append(f.signal_likeness)
+        #agg_dict['dates'] = np.array(dates)
         agg_dict['times'] = np.array(times)
         agg_dict['seismometer'] = np.array(seismometer)
         agg_dict['cant_raw_data'] = np.array(cant_raw_data)
@@ -825,14 +918,19 @@ class AggregateData:
         agg_dict['pspd_ffts'] = np.array(pspd_ffts)
         agg_dict['pspd_ffts_full'] = np.array(pspd_ffts_full)
         agg_dict['pspd_sb_ffts'] = np.array(pspd_sb_ffts)
+        agg_dict['cross_asds'] = np.array(cross_asds)
+        agg_dict['cross_asds_full'] = np.array(cross_asds_full)
+        agg_dict['cross_sb_asds'] = np.array(cross_sb_asds)
         agg_dict['template_ffts'] = np.array(template_ffts)
         agg_dict['template_params'] = np.array(template_params)
         agg_dict['cant_fft'] = np.array(cant_fft)
         agg_dict['quad_amps'] = np.array(quad_amps)
         agg_dict['quad_phases'] = np.array(quad_phases)
+        agg_dict['sig_likes'] = np.array(sig_likes)
         self.agg_dict = agg_dict
         print('Done building dictionary.')
         if lightweight:
+            del self.file_data_objs
             self.file_data_objs = []
 
 
@@ -909,8 +1007,8 @@ class AggregateData:
         and other relevant object attributes.
         '''
         bad_file_indices = np.copy(self.bin_indices[:,-1]).astype(bool)
-        self.bad_files = list(np.array(self.file_list)[bad_file_indices])
-        self.file_list = list(np.delete(self.file_list,bad_file_indices,axis=0))
+        self.bad_files = np.array(self.file_list)[bad_file_indices]
+        self.file_list = np.delete(self.file_list,bad_file_indices,axis=0)
         self.file_data_objs = list(np.delete(self.file_data_objs,bad_file_indices,axis=0))
         self.bin_indices = np.delete(self.bin_indices,bad_file_indices,axis=0)
 
@@ -1077,7 +1175,7 @@ class AggregateData:
         
         # get all possible combinations of the indices found above
         p0_bead_inds = list(range(len(self.p0_bead)))
-        index_arrays = np.array([i for i in product(p0_bead_inds,diam_bead_inds,descrip_inds,\
+        index_arrays = np.array([i for i in product(diam_bead_inds,p0_bead_inds,descrip_inds,\
                                                     cant_x_inds,cant_z_inds,seis_inds,[0],[0])])
 
         # needs to be updated to take a range of acceptable indices for any given dimension
@@ -1231,7 +1329,7 @@ class AggregateData:
               .format(*[i for i in diag_mat.flatten()]))
         
 
-    def fit_alpha_all_files(self,file_indices=None):
+    def fit_alpha_all_files(self,file_indices=None,sensor='qpd',use_sl=False):
         '''
         Find the best fit alpha to a dataset. Most of this should eventually be moved to
         stats.py so that different likelihood functions can be called from here.
@@ -1242,12 +1340,12 @@ class AggregateData:
         
         likelihood_coeffs = []
         for i in file_indices:
-            likelihood_coeffs.append(self.fit_alpha_for_file(i))
+            likelihood_coeffs.append(self.fit_alpha_for_file(i,sensor,use_sl=use_sl))
 
         return np.array(likelihood_coeffs)
 
 
-    def fit_alpha_for_file(self,file_index,sensor='qpd'):
+    def fit_alpha_for_file(self,file_index,sensor='qpd',use_sl=False):
         '''
         Find the best fit alpha for a single file and return it. This function will be
         called in parallel so that all files can be processed to produce a limit.
@@ -1255,19 +1353,28 @@ class AggregateData:
 
         lambdas = self.agg_dict['template_params'][file_index]
         yuk_ffts = self.agg_dict['template_ffts'][file_index]
-        bead_ffts = self.agg_dict[sensor+'_ffts'][file_index]
-        bead_sb_ffts = self.agg_dict[sensor+'_sb_ffts'][file_index]
+        if sensor=='both':
+            bead_ffts = self.agg_dict['cross_asds'][file_index]
+            bead_sb_ffts = self.agg_dict['cross_sb_asds'][file_index]
+        else:
+            bead_ffts = self.agg_dict[sensor+'_ffts'][file_index]
+            bead_sb_ffts = self.agg_dict[sensor+'_sb_ffts'][file_index]
         num_sb = int(bead_sb_ffts.shape[1]/bead_ffts.shape[1])
         good_inds = self.agg_dict['good_inds'][file_index]
-
+        sig_likes = self.agg_dict['sig_likes'][file_index][:,good_inds]
         likelihood_coeffs = np.zeros((len(good_inds),3,len(lambdas),4),dtype=np.float128)
         
         for harm,_ in enumerate(good_inds):
             for axis in [0,1,2]:
 
                 sb_fft_array = bead_sb_ffts[axis,harm*num_sb:(harm+1)*num_sb]
-                data_real = np.real(bead_ffts[axis,harm])
-                data_imag = np.imag(bead_ffts[axis,harm])
+                data = bead_ffts[axis,harm]
+                if use_sl and axis!=2:
+                    sl = sig_likes[axis,harm]
+                    noise = np.sqrt(np.mean(np.abs(sb_fft_array)**2))
+                    data = data*(sl*max(0,np.abs(data) - noise))
+                data_real = np.real(data)
+                data_imag = np.imag(data)
                 var = (1./(2.*num_sb))*np.sum(np.real(sb_fft_array)**2+np.imag(sb_fft_array)**2)
 
                 for lambda_ind,_ in enumerate(lambdas):
@@ -1281,7 +1388,7 @@ class AggregateData:
                     NLL_c = (data_real**2 + data_imag**2)/(2.*var)
 
                     # maximum likelihood estimate for alpha
-                    alpha_mle = -NLL_b/(2.*NLL_a) #(data_real*model_real + data_imag*model_imag)/(model_real**2 + model_imag**2)
+                    alpha_mle = -NLL_b/(2.*NLL_a)
                     
                     likelihood_coeffs[harm,axis,lambda_ind,:] = np.array((NLL_a,NLL_b,NLL_c,alpha_mle))
 
@@ -1306,6 +1413,7 @@ class AggregateData:
         '''
         Comine all likelihoods for individual harmonics into likelihoods for
         each axis. Returns an array containing combined likelihoods for each axis.
+        Note that this is NOT how the sensitivity was calculated in the 2021 PRD.
         '''
 
         # for quadratic log-likelihoods, just add coefficients and calculate
@@ -1315,7 +1423,24 @@ class AggregateData:
         return coeffs_by_harm
     
 
-    def test_stat_func(self,alpha,likelihood_coeffs):
+    def group_likelihoods_by_test(self,likelihood_coeffs,axis=None):
+        '''
+        Returns an array of likelihood functions, each of which will independently be used
+        to calculate a test statistic. A limit can then be calculated using the sum of the
+        resulting test statistics.
+        '''
+
+        # final array should have shape (harmonic, lambda, NLL coefficients)
+        if axis==None:
+            likelihood_coeffs = likelihood_coeffs.reshape((int(likelihood_coeffs.shape[0]*likelihood_coeffs.shape[1]),\
+                                                           likelihood_coeffs.shape[2],likelihood_coeffs.shape[3]))
+        else:
+            likelihood_coeffs = likelihood_coeffs[axis,:,:,:]
+        
+        return likelihood_coeffs
+    
+
+    def test_stat_func(self,alpha,likelihood_coeffs,discovery=False):
         '''
         Returns the test statistic as a function of alpha given a single set of
         likelihood coefficients. Works for positive or negative alpha depending on
@@ -1332,7 +1457,10 @@ class AggregateData:
         
         # definition of the test statistic
         test_stat = 2.*(quadratic(alpha,*likelihood_coeffs[:-1]) - quadratic(alpha_hat,*likelihood_coeffs[:-1]))
-        test_stat[np.abs(alpha)<np.abs(alpha_hat)] = 0
+
+        # if setting a limit, set the test stat to 0 for alpha less than the MLE
+        if not discovery:
+            test_stat[np.abs(alpha)<np.abs(alpha_hat)] = 0
 
         return test_stat
     
@@ -1404,15 +1532,71 @@ class AggregateData:
             return np.nan
 
         return result.x[0]
-
     
-    def get_limit_axis_or_harm(self,harm='all',axis='all'):
+
+    def get_discovery_from_likelihoods(self,likelihood_coeffs,z_discovery=3):
         '''
-        Compute a limit for either an individual harmonic on a particular axis, all harmonics
-        on that axis, or for all harmonics for all axes.
+        Report a discovery at some alpha and lambda. When reporting a discovery, likelihood functions
+        should be combined and a single test statistic reported for all axes/harmonics, otherwise a
+        false discovery will be made if individual harmonics show background-like measurements.
         '''
+        # critical value of the test statistic ASSUMING WILKS'S THEOREM HOLDS
+        # ***** CHECK IF FACTOR 2 IS REQUIRED HERE *****
+        confidence_level = norm.cdf(z_discovery)
+        con_val = chi2(1).ppf(confidence_level)
+
+        # can either pass an array of likelihood functions, in which case they will be combined,
+        # or just a single likelihood function. Either way a single discovery will be reported.
+        while len(likelihood_coeffs.shape)>1:
+            likelihood_coeffs = np.sum(likelihood_coeffs,axis=0)
+            likelihood_coeffs[...,-1] = -likelihood_coeffs[...,1]/(2.*likelihood_coeffs[...,0])
+
+        # test statistic for the discovery is the likelihood ratio for alpha=0
+        test_stat = self.test_stat_func(np.array([0.]),likelihood_coeffs,discovery=True)[0]
+
+        # if discovery threshold is crossed, a discovery has been made. Report both the alpha MLE
+        # and the significance of the discovery
+        if test_stat > con_val:
+            signif = norm.ppf(test_stat)
+            return [likelihood_coeffs[-1],signif]
+        else:
+            # no discovery, return nan for the discovered alpha and the significance
+            return [np.nan,np.nan]
 
 
+    def get_alpha_vs_lambda(self,likelihood_coeffs,discovery=False,\
+                            z_discovery=3,confidence_level=0.95):
+        '''
+        Loop through all lambda values and compute the limit or discovery for each value.
+        '''
+
+        lambdas = self.agg_dict['template_params'][0]
+
+        if not discovery:
+            pos_limit = []
+            neg_limit = []
+            for i in range(len(lambdas)):
+                pos_limit.append(self.get_limit_from_likelihoods(likelihood_coeffs[:,i,:],\
+                                                                 confidence_level=confidence_level,\
+                                                                 alpha_sign=1))
+                neg_limit.append(self.get_limit_from_likelihoods(likelihood_coeffs[:,i,:],\
+                                                                 confidence_level=confidence_level,\
+                                                                 alpha_sign=-1))
+            pos_limit = np.array(pos_limit)
+            neg_limit = -np.array(neg_limit)
+            return pos_limit,neg_limit
+                
+        if discovery:
+            disc = []
+            for i in range(len(lambdas)):
+                disc.append(self.get_discovery_from_likelihoods(likelihood_coeffs[:,i,:],\
+                                                                z_discovery=z_discovery)[0])
+            disc = np.array(disc)
+            pos_disc = np.ones(len(disc))*np.nan
+            neg_disc = np.ones(len(disc))*np.nan
+            pos_disc[disc>0] = disc[disc>0]
+            neg_disc[disc<0] = np.abs(disc[disc<0])
+            return pos_disc,neg_disc
 
 
     def merge_objects(self,object_list):
@@ -1425,12 +1609,12 @@ class AggregateData:
             object1 = object_list[0]
             object2 = object_list[1]
             # just add them all together
-            self.data_dirs = object1.data_dirs + object2.data_dirs
-            self.file_prefixes = object1.file_prefixes + object2.file_prefixes
+            self.data_dirs = np.array(list(object1.data_dirs) + list(object2.data_dirs))
+            self.file_prefixes = np.array(list(object1.file_prefixes) + list(object2.file_prefixes))
             self.descrips = np.array(list(object1.descrips) + list(object2.descrips))
-            self.num_to_load = object1.num_to_load + object2.num_to_load
-            self.num_files = object1.num_files + object2.num_files
-            self.file_list = object1.file_list + object2.file_list
+            self.num_to_load = np.array(list(object1.num_to_load) + list(object2.num_to_load))
+            self.num_files = np.array(list(object1.num_files) + list(object2.num_files))
+            self.file_list = np.array(list(object1.file_list) + list(object2.file_list))
             self.p0_bead = np.array(list(object1.p0_bead) + list(object2.p0_bead))
             self.diam_bead = np.array(list(object1.diam_bead) + list(object2.diam_bead))
             self.file_data_objs = object1.file_data_objs + object2.file_data_objs
@@ -1453,26 +1637,98 @@ class AggregateData:
             self.__remove_duplicate_bead_params()
             object_list = [deepcopy(self)] + object_list[2:]
 
-        print('Objects merged successfully. Note that the binning by cantilever position and'\
+        print('Objects merged successfully. Note that the binning by cantilever position and '\
               +'bias must be redone after merging.')
 
 
-    def save(self,path):
+    def save_to_hdf5(self,path):
         '''
-        Save the AggregateData object to the path specified.
+        Save the data in the AggregateData object to an hdf5 file.
         '''
-        outfile = open(path,'wb')
-        pickle.dump(self,outfile)
-        outfile.close()
-        print('AggregateData object saved to '+path)
+        print('Saving AggregateData object...')
+
+        # if only a filename is given, append the default base path
+        if len(path.split('/'))==1:
+            path = '/data/new_trap_processed/processed_files/clarke_temp/' + path
+
+        if len(self.file_data_objs):
+            print('Warning: FileData objects cannot be saved to hdf5. Only saving AggregateData attributes.')
+        
+        with h5py.File(path, 'w') as f:
+            # add the commit hash, creation date, and user as attributes
+            short_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('ascii').strip()
+            f.attrs['git_revision_short_hash'] = short_hash
+            f.attrs['creation_timestamp'] = time.time()
+            f.attrs['creation_user'] = os.environ.get('USER')
+            # everything other than agg_dict goes in run_params
+            f.create_group('run_params')
+            for attr_name, attr_value in vars(self).items():
+                if isinstance(attr_value, dict):
+                    # agg_dict gets its own group
+                    dict_group = f.create_group(attr_name)
+                    for key, value in attr_value.items():
+                        # add a dataset for each column of the dictionary
+                        dict_group.create_dataset(key, data=value)
+                elif isinstance(attr_value, float):
+                    # add floats
+                    f.create_dataset('run_params/'+attr_name, data=attr_value)
+                elif isinstance(attr_value, np.ndarray):
+                    # add numpy arrays of strings or anything else
+                    if attr_value.dtype.type is np.str_:
+                        f.create_dataset('run_params/'+attr_name, data=np.array(attr_value,dtype='S'))
+                    else:
+                        f.create_dataset('run_params/'+attr_name, data=attr_value)
+
+            print('AggregateData object saved to '+path)
 
 
-    def load(self,path):
+    def load_from_hdf5(self,path):
         '''
-        Load an AggregateData object that was saved previously.
+        Load the AggregateData object from an hdf5 file.
         '''
-        infile = open(path,'rb')
-        self.__dict__.update(pickle.load(infile).__dict__)
-        infile.close()
-        print('AggregateData object loaded from '+path)
+        print('Loading AggregateData object...')
 
+        # if only a filename is given, append the default base path
+        if len(path.split('/'))==1:
+            path = '/data/new_trap_processed/processed_files/clarke_temp/' + path
+
+        this_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('ascii').strip()
+
+        with h5py.File(path, 'r') as f:
+
+            # check for code version compatibility
+            short_hash = f.attrs['git_revision_short_hash']
+            if short_hash!=this_hash:
+                print('Warning: attempting to load a file created with an earlier version of OptLevAnalysis.')
+                print('To ensure compatibility, run "git checkout {}" prior to loading.'.format(short_hash))
+
+            # load the dictionary data
+            agg_dict = {}
+            for ds_name in f['agg_dict'].keys():
+                agg_dict[ds_name] = f['agg_dict/'+ds_name][()]
+            self.agg_dict = agg_dict
+
+            # load the run parameters
+            self.data_dirs = np.array(f['run_params/data_dirs'],dtype=np.str_)
+            self.file_prefixes = np.array(f['run_params/file_prefixes'],dtype=np.str_)
+            self.descrips = np.array(f['run_params/descrips'],dtype=np.str_)
+            self.file_list = np.array(f['run_params/file_list'],dtype=np.str_)
+            self.p0_bead = np.array(f['run_params/p0_bead'])
+            self.diam_bead = np.array(f['run_params/diam_bead'])
+            self.seis_thresh = np.array(f['run_params/seis_thresh'])
+            self.num_to_load = np.array(f['run_params/num_to_load'])
+            self.num_files = np.array(f['run_params/num_files'])
+            self.bin_indices = np.array(f['run_params/bin_indices'])
+            self.cant_bin_x = np.array(f['run_params/cant_bins_x'])
+            self.cant_bins_z = np.array(f['run_params/cant_bins_z'])
+            self.bad_files = np.array(f['run_params/bad_files'])
+
+            # fill empty attributes
+            self.file_data_objs = []
+            self.signal_models = []
+
+        print('Loaded AggregateData object from '+path)
+        
+
+
+                    

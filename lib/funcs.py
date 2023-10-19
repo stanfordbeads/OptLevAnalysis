@@ -155,3 +155,12 @@ def quadratic(x, a, b, c):
     Quadratic function in standard form
     '''
     return a*x**2 + b*x + c
+
+def rayleigh(spectra):
+    '''
+    Compute the Rayleigh spectrum for a time series of data.
+    '''
+    stds = np.std(spectra,axis=0)
+    means = np.mean(spectra,axis=0)
+
+    return stds/means
