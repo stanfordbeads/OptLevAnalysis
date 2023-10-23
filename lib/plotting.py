@@ -268,7 +268,7 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None):
     Plof of the QPD and PSPD spectra for a given dataset.
     '''
     if descrip is None:
-        descrip=agg_dict['dates'][0]
+        descrip = datetime.fromtimestamp((agg_dict['times'][0,0])*1e-9).strftime('%Y%m%d')
 
     freqs = agg_dict['freqs'][0]
 
@@ -335,12 +335,12 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None):
 
 
 def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
-                t_bin_width=300,vmin=None,vmax=None):
+                t_bin_width=600,vmin=None,vmax=None):
     '''
     Plot a spectrogram for the given dataset.
     '''
     if descrip is None:
-        descrip=agg_dict['dates'][0]
+        descrip = datetime.fromtimestamp((agg_dict['times'][0,0])*1e-9).strftime('%Y%m%d')
 
     freqs = agg_dict['freqs'][0]
     amps = np.abs(agg_dict[sensor+'_ffts_full'][:,axis_ind,:])
@@ -403,12 +403,12 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
 
 
 def time_evolution(agg_dict,descrip=None,sensor='qpd',axis_ind=0,\
-                   t_bin_width=60,ylim=None):
+                   t_bin_width=600,ylim=None):
     '''
     Plot the time evolution of the measurement of a sensor along a given axis.
     '''
     if descrip is None:
-        descrip=agg_dict['dates'][0]
+        descrip = datetime.fromtimestamp((agg_dict['times'][0,0])*1e-9).strftime('%Y%m%d')
 
     # get timing information from the dictionary
     times = agg_dict['times']
