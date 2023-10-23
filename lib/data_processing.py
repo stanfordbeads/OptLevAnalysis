@@ -78,6 +78,7 @@ class FileData:
         self.read_hdf5()
         self.fsamp = self.data_dict['fsamp']
         self.seismometer = self.data_dict['seismometer']
+        self.bead_height = self.data_dict['bead_height']
         if diagonalize_qpd:
             self.get_diag_mat()
         self.get_xyz_from_quad()
@@ -138,6 +139,7 @@ class FileData:
             cant_voltages = np.zeros(6)
         dd['cantilever_DC'] = [cant_voltages[i] for i in [0,2,4]]
         dd['cantilever_amp'] = [cant_voltages[i] for i in [1,3,5]]
+        dd['bead_height'] = f.attrs['bead_height']
         self.data_dict = dd
         f.close()
 
@@ -791,13 +793,13 @@ class AggregateData:
                 return
             signal_models = self.signal_models
         else:
-            signal_models = [None]*len(self.diam_bead)
             self.get_file_list(no_config=no_config)
+            signal_models = [None]*len(self.diam_bead)
         print('Loading data from {} files...'.format(len(self.file_list)))
         file_data_objs = Parallel(n_jobs=num_cores)(delayed(self.process_file)\
                                                     (file_path,diagonalize_qpd,signal_models[self.bin_indices[i,0]],\
                                                      self.p0_bead[self.bin_indices[i,1]],harms,no_tf,lightweight) \
-                                                    for i,file_path in enumerate(tqdm(self.file_list)))
+                                                     for i,file_path in enumerate(tqdm(self.file_list)))
         # record which files are bad in the self.bin_indices array
         for i,file_data_obj in enumerate(file_data_objs):
             if file_data_obj.is_bad == True:
@@ -854,6 +856,7 @@ class AggregateData:
         #dates = []
         times = []
         seismometer = []
+        bead_height = []
         cant_raw_data = []
         quad_raw_data = []
         mean_cant_pos = []
@@ -880,6 +883,7 @@ class AggregateData:
             #dates.append(f.date)
             times.append(f.times)
             seismometer.append(f.seismometer)
+            bead_height.append(f.bead_height)
             cant_raw_data.append(f.cant_raw_data)
             quad_raw_data.append(f.quad_raw_data)
             mean_cant_pos.append(f.mean_cant_pos)
@@ -905,6 +909,7 @@ class AggregateData:
         #agg_dict['dates'] = np.array(dates)
         agg_dict['times'] = np.array(times)
         agg_dict['seismometer'] = np.array(seismometer)
+        agg_dict['bead_height'] = np.array(bead_height)
         agg_dict['cant_raw_data'] = np.array(cant_raw_data)
         agg_dict['quad_raw_data'] = np.array(quad_raw_data)
         agg_dict['mean_cant_pos'] = np.array(mean_cant_pos)
@@ -1371,8 +1376,8 @@ class AggregateData:
                 data = bead_ffts[axis,harm]
                 if use_sl and axis!=2:
                     sl = sig_likes[axis,harm]
-                    noise = np.sqrt(np.mean(np.abs(sb_fft_array)**2))
-                    data = data*(sl*max(0,np.abs(data) - noise))
+                    noise = np.mean(np.abs(sb_fft_array)**2)
+                    data = np.sqrt(sl*max(0,np.abs(data)**2-noise) + noise)*np.exp(1j*np.angle(data))
                 data_real = np.real(data)
                 data_imag = np.imag(data)
                 var = (1./(2.*num_sb))*np.sum(np.real(sb_fft_array)**2+np.imag(sb_fft_array)**2)
