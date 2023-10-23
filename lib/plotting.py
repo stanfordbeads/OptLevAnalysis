@@ -268,7 +268,7 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None):
     Plof of the QPD and PSPD spectra for a given dataset.
     '''
     if descrip is None:
-        descrip = datetime.fromtimestamp((agg_dict['times'][0,0])*1e-9).strftime('%Y%m%d')
+        descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
 
     freqs = agg_dict['freqs'][0]
 
@@ -340,7 +340,7 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
     Plot a spectrogram for the given dataset.
     '''
     if descrip is None:
-        descrip = datetime.fromtimestamp((agg_dict['times'][0,0])*1e-9).strftime('%Y%m%d')
+        descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
 
     freqs = agg_dict['freqs'][0]
     amps = np.abs(agg_dict[sensor+'_ffts_full'][:,axis_ind,:])
@@ -350,12 +350,22 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
     start_date = datetime.fromtimestamp(av_times[0]*1e-9).strftime('%b %d, %H:%M:%S')
     hours = (av_times-av_times[0])*1e-9/3600.
 
+    delta_t = (av_times[1]-av_times[0])*1e-9
+    t_bins = int(round(t_bin_width/delta_t))
+    num_t_bins = int(len(av_times)/t_bins)
+    spec_ray = np.zeros((num_t_bins,len(freqs)))
+    spec_amp = np.zeros((num_t_bins,len(freqs)))
+    plot_times = np.zeros(num_t_bins)
+
     fig,ax = plt.subplots()
     if which=='roi':
         if (vmin is None) or (vmax is None):
             vmin = 2e-18
             vmax = 2e-14
-        pcm = ax.pcolormesh(hours,freqs,amps.T,norm=LogNorm(vmin=vmin,vmax=vmax),cmap='magma')
+        for i in range(spec_ray.shape[0]):
+            spec_amp[i,:] = np.mean(amps[i*t_bins:(i+1)*t_bins,:],axis=0)
+            plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
+        pcm = ax.pcolormesh(plot_times,freqs,spec_amp.T,norm=LogNorm(vmin=vmin,vmax=vmax),cmap='magma')
         ax.set_ylabel('Frequency [Hz]')
         ax.set_ylim([0.1,50])
         ax.set_xlabel('Time since '+start_date+' [hours]')
@@ -366,7 +376,10 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
         if (vmin is None) or (vmax is None):
             vmin = 2e-19
             vmax = 2e-14
-        pcm = ax.pcolormesh(hours,freqs,amps.T,norm=LogNorm(vmin=vmin,vmax=vmax),cmap='magma')
+        for i in range(spec_ray.shape[0]):
+            spec_amp[i,:] = np.mean(amps[i*t_bins:(i+1)*t_bins,:],axis=0)
+            plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
+        pcm = ax.pcolormesh(plot_times,freqs,spec_amp.T,norm=LogNorm(vmin=vmin,vmax=vmax),cmap='magma')
         ax.set_ylabel('Frequency [Hz]')
         ax.set_ylim([0.1,2500])
         ax.set_xlabel('Time since '+start_date+' [hours]')
@@ -378,17 +391,10 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
         if (vmin is None) or (vmax is None):
             vmin = 0
             vmax = 2
-        delta_t = (av_times[1]-av_times[0])*1e-9
-        t_bins = int(round(t_bin_width/delta_t))
-        num_t_bins = int(len(av_times)/t_bins)
-        qpd_x_ray = np.zeros((num_t_bins,len(freqs)))
-        rayleigh_times = np.zeros(num_t_bins)
-
-        for i in range(qpd_x_ray.shape[0]):
-            qpd_x_ray[i,:] = rayleigh(amps[i*t_bins:(i+1)*t_bins,:]**2)
-            rayleigh_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
-
-        pcm = ax.pcolormesh(rayleigh_times,freqs,qpd_x_ray.T,vmin=vmin,vmax=vmax,cmap='coolwarm')
+        for i in range(spec_ray.shape[0]):
+            spec_ray[i,:] = rayleigh(amps[i*t_bins:(i+1)*t_bins,:]**2)
+            plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
+        pcm = ax.pcolormesh(plot_times,freqs,spec_ray.T,vmin=vmin,vmax=vmax,cmap='coolwarm')
         ax.set_ylabel('Frequency [Hz]')
         ax.set_ylim([0.1,50])
         ax.set_xlabel('Time since '+start_date+' [hours]')
@@ -408,7 +414,7 @@ def time_evolution(agg_dict,descrip=None,sensor='qpd',axis_ind=0,\
     Plot the time evolution of the measurement of a sensor along a given axis.
     '''
     if descrip is None:
-        descrip = datetime.fromtimestamp((agg_dict['times'][0,0])*1e-9).strftime('%Y%m%d')
+        descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
 
     # get timing information from the dictionary
     times = agg_dict['times']
@@ -438,7 +444,7 @@ def time_evolution(agg_dict,descrip=None,sensor='qpd',axis_ind=0,\
         plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
 
     # plot the results
-    fig,ax = plt.subplots(2,1,sharex=True)
+    fig,ax = plt.subplots(2,1,figsize=(8,8),sharex=True)
     for i in range(len(good_freqs)):
         ax[0].semilogy(plot_times,amp_t[:,i],ls='none',marker='o',ms=2,alpha=0.65,\
                     label='{:.1f} Hz'.format(good_freqs[i]),color=colors(i))
@@ -463,4 +469,75 @@ def time_evolution(agg_dict,descrip=None,sensor='qpd',axis_ind=0,\
         plot_times,amp_t,phase_t,num_t_bins,t_bins,delta_t
 
     return fig,ax
+
+
+def position_drift(agg_dict,descrip=None,t_bin_width=600):
+    '''
+    Plot the drift over time in the position of the bead and cantilever,
+    along with the laser and transmitted power.
+    '''
+    if descrip is None:
+        descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
+
+    # get parameters to plot
+    lp = agg_dict['mean_laser_power']
+    pt = agg_dict['mean_p_trans']
+    bh = agg_dict['bead_height']
+    cx = agg_dict['mean_cant_pos'][:,0]
+    cz = agg_dict['mean_cant_pos'][:,1]
+    x0 = cx[0]
+    z0 = cz[0]
+    cx = cx - x0
+    cz = cz - z0
     
+    times = agg_dict['times']
+    av_times = np.mean(times,axis=1)
+    start_date = datetime.fromtimestamp(av_times[0]*1e-9).strftime('%b %d, %H:%M:%S')
+    hours = (av_times-av_times[0])*1e-9/3600.
+
+    # average by time
+    delta_t = (av_times[1]-av_times[0])*1e-9
+    t_bins = int(round(t_bin_width/delta_t))
+    num_t_bins = int(len(av_times)/t_bins)
+    lp_t = np.zeros((num_t_bins))
+    pt_t = np.zeros((num_t_bins))
+    bh_t = np.zeros((num_t_bins))
+    cx_t = np.zeros((num_t_bins))
+    cz_t = np.zeros((num_t_bins))
+    plot_times = np.zeros(num_t_bins)
+
+    for i in range(num_t_bins):
+        lp_t[i] = np.mean(lp[i*t_bins:(i+1)*t_bins])
+        pt_t[i] = np.mean(pt[i*t_bins:(i+1)*t_bins])
+        bh_t[i] = np.mean(bh[i*t_bins:(i+1)*t_bins])
+        cx_t[i] = np.mean(cx[i*t_bins:(i+1)*t_bins])
+        cz_t[i] = np.mean(cz[i*t_bins:(i+1)*t_bins])
+        plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
+
+    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
+    fig,ax = plt.subplots(2,1,figsize=(8,8),sharex=True)
+    l1 = ax[0].plot(plot_times,lp_t,color=colors[0],alpha=0.65,label='Laser power')
+    l2 = ax[0].plot(plot_times,pt_t*40,color=colors[1],alpha=0.65,label='Trans. power ($\\times 40$)')
+    ax[0].set_title('Time evolution of laser power, bead height, and cantilever position')
+    ax[0].set_ylabel('Power [mW]')
+    ax2 = ax[0].twinx()
+    l3 = ax2.plot(plot_times,bh_t,color=colors[2],ls='-.',label='Bead height')
+    ls = l1+l2+l3
+    labs = [l.get_label() for l in ls]
+    ax2.set_ylabel('Bead height [$\mu$m]',rotation=270,labelpad=15)
+    ax[0].grid(which='both')
+    ax[0].legend(ls,labs).set_zorder=(0)
+
+    ax[1].plot(plot_times,cx_t,label='Cant. $x~-$ {:.1f} $\mu$m'.format(x0))
+    ax[1].plot(plot_times,cz_t,label='Cant. $z~-$ {:.1f} $\mu$m'.format(z0))
+    ax[1].set_ylabel('Cantilever position drift [$\mu$m]')
+    ax[1].set_xlabel('Time since '+start_date+' [hours]')
+    ax[1].set_xlim([min(plot_times),max(plot_times)])
+    ax[1].grid(which='both')
+    ax[1].legend()
+
+    del lp,pt,bh,cx,cz,lp_t,pt_t,bh_t,cx_t,cz_t,times,plot_times,av_times,\
+        start_date,hours,delta_t,num_t_bins,colors
+    
+    return fig,ax

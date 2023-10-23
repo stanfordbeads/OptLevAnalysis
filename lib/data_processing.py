@@ -79,6 +79,7 @@ class FileData:
         self.fsamp = self.data_dict['fsamp']
         self.seismometer = self.data_dict['seismometer']
         self.bead_height = self.data_dict['bead_height']
+        self.get_laser_power()
         if diagonalize_qpd:
             self.get_diag_mat()
         self.get_xyz_from_quad()
@@ -101,6 +102,8 @@ class FileData:
         # for use with AggregateData, don't carry around all the raw data
         if lightweight:
             self.data_dict = {}
+            self.laser_power_full = np.array(())
+            self.p_trans_full = np.array(())
             self.cant_raw_data = np.array(((),(),()))
             self.quad_raw_data = np.array(((),(),()))
             self.pspd_raw_data = np.array(((),(),()))
@@ -122,11 +125,13 @@ class FileData:
         try:
             dd['seismometer'] = np.array(f['seismometer'])
             dd['laser_power'] = np.array(f['laser_power'])
+            dd['p_trans'] = np.array(f['p_trans'])
             dd['pspd_data'] = np.array(f['PSPD'])
         except:
             dd['seismometer'] = np.zeros_like(dd['cant_data'][0])
             dd['laser_power'] = np.zeros_like(dd['cant_data'])
             dd['pspd_data'] = np.zeros_like(dd['cant_data'])
+            dd['p_trans'] = np.zeros_like(dd['cant_data'])
         dd['timestamp_ns'] = os.stat(self.file_name).st_mtime*1e9
         dd['fsamp'] = f.attrs['Fsamp']/f.attrs['downsamp']
         try:
@@ -140,8 +145,32 @@ class FileData:
         dd['cantilever_DC'] = [cant_voltages[i] for i in [0,2,4]]
         dd['cantilever_amp'] = [cant_voltages[i] for i in [1,3,5]]
         dd['bead_height'] = f.attrs['bead_height']
+
         self.data_dict = dd
         f.close()
+
+    
+    def get_laser_power(self):
+        '''
+        Adds the full time series of laser power and the mean for this file
+        as attributes.
+        '''
+
+        # calibration factor for laser and transmitted power readings
+        milliwatts_per_count = 2.72e-9 # PLACEHOLDER, NEED TO ADD CORRECT CALIBRATION FACTOR
+        milliwatts_per_volt = 1./3.3e2
+
+        # save the full array of laser power readings
+        self.laser_power_full = milliwatts_per_count*self.data_dict['laser_power']
+
+        # save the mean laser power for this file
+        self.mean_laser_power = np.mean(self.laser_power_full)
+
+        # save the full array of transmitted power readings
+        self.p_trans_full = milliwatts_per_volt*self.data_dict['p_trans']
+
+        # save the mean transmitted power for this file
+        self.mean_p_trans = np.mean(self.p_trans_full)
 
 
     def get_diag_mat(self):
@@ -853,10 +882,14 @@ class AggregateData:
         '''
         print('Building dictionary of file data...')
         agg_dict = {}
-        #dates = []
         times = []
+        timestamp = []
         seismometer = []
         bead_height = []
+        mean_laser_power = []
+        laser_power_full = []
+        mean_p_trans = []
+        p_trans_full = []
         cant_raw_data = []
         quad_raw_data = []
         mean_cant_pos = []
@@ -880,10 +913,14 @@ class AggregateData:
         quad_phases = []
         sig_likes = []
         for f in self.file_data_objs:
-            #dates.append(f.date)
+            timestamp.append(f.times[0]*1e-9)
             times.append(f.times)
             seismometer.append(f.seismometer)
             bead_height.append(f.bead_height)
+            mean_laser_power.append(f.mean_laser_power)
+            laser_power_full.append(f.laser_power_full)
+            mean_p_trans.append(f.mean_p_trans)
+            p_trans_full.append(f.p_trans_full)
             cant_raw_data.append(f.cant_raw_data)
             quad_raw_data.append(f.quad_raw_data)
             mean_cant_pos.append(f.mean_cant_pos)
@@ -906,10 +943,14 @@ class AggregateData:
             quad_amps.append(f.quad_amps)
             quad_phases.append(f.quad_phases)
             sig_likes.append(f.signal_likeness)
-        #agg_dict['dates'] = np.array(dates)
         agg_dict['times'] = np.array(times)
+        agg_dict['timestamp'] = np.array(timestamp)
         agg_dict['seismometer'] = np.array(seismometer)
         agg_dict['bead_height'] = np.array(bead_height)
+        agg_dict['mean_laser_power'] = np.array(mean_laser_power)
+        agg_dict['laser_power_full'] = np.array(laser_power_full)
+        agg_dict['mean_p_trans'] = np.array(mean_p_trans)
+        agg_dict['p_trans_full'] = np.array([p_trans_full])
         agg_dict['cant_raw_data'] = np.array(cant_raw_data)
         agg_dict['quad_raw_data'] = np.array(quad_raw_data)
         agg_dict['mean_cant_pos'] = np.array(mean_cant_pos)
