@@ -515,7 +515,7 @@ class FileData:
         max_ind = np.argmin(np.abs(freqs - max_freq))
 
         # find the drive frequency, ignoring the DC bin
-        fund_ind = np.argmax(np.abs(cant_fft[1:max_ind])) + 1
+        fund_ind = int(np.argmax(np.abs(cant_fft[1:max_ind])) + 1)
         drive_freq = freqs[fund_ind]
 
         # mask is  initialized with 1 at the drive frequency and 0 elsewhere
@@ -765,14 +765,18 @@ class AggregateData:
         self.file_list = np.array([])
         self.p0_bead = np.array(())
         self.diam_bead = np.array(())
-        self.seis_thresh = 1e3
         self.file_data_objs = []
         self.bin_indices = np.array(())
         self.agg_dict = {}
+        self.freqs = np.array(())
+        self.good_inds = np.array(())
+        self.fund_ind = 0
+        self.fsamp = 0
+        self.nsamp = 0
         self.cant_bins_x = np.array((0,))
         self.cant_bins_z = np.array((0,))
         self.bad_files = np.array([])
-        self.signal_models = None
+        self.signal_models = []
 
 
     def get_file_list(self,no_config=False):
@@ -820,7 +824,7 @@ class AggregateData:
         in the relevant data for physics analysis.
         '''
         if load_templates:
-            if self.signal_models is None:
+            if not len(self.signal_models):
                 print('Signal model not loaded! Load a signal model first. Aborting.')
                 return
             signal_models = self.signal_models
@@ -883,7 +887,10 @@ class AggregateData:
         Build a dict containing the relevant data from each FileData object to
         make indexing the data easier.
         '''
+
         print('Building dictionary of file data...')
+
+        # data that is unique to each file goes in agg_dict
         agg_dict = {}
         times = []
         timestamp = []
@@ -896,9 +903,6 @@ class AggregateData:
         cant_raw_data = []
         quad_raw_data = []
         mean_cant_pos = []
-        freqs = []
-        good_inds = []
-        fund_ind = []
         qpd_ffts = []
         qpd_ffts_full = []
         qpd_sb_ffts = []
@@ -923,9 +927,6 @@ class AggregateData:
             cant_raw_data.append(f.cant_raw_data)
             quad_raw_data.append(f.quad_raw_data)
             mean_cant_pos.append(f.mean_cant_pos)
-            good_inds.append(f.good_inds)
-            fund_ind.append(f.fund_ind)
-            freqs.append(f.freqs)
             qpd_ffts.append(f.qpd_ffts)
             qpd_ffts_full.append(f.qpd_ffts_full)
             qpd_sb_ffts.append(f.qpd_sb_ffts)
@@ -949,9 +950,6 @@ class AggregateData:
         agg_dict['cant_raw_data'] = np.array(cant_raw_data)
         agg_dict['quad_raw_data'] = np.array(quad_raw_data)
         agg_dict['mean_cant_pos'] = np.array(mean_cant_pos)
-        agg_dict['freqs'] = np.array(freqs)
-        agg_dict['good_inds'] = np.array(good_inds)
-        agg_dict['fund_ind'] = np.array(fund_ind)
         agg_dict['qpd_ffts'] = np.array(qpd_ffts)
         agg_dict['qpd_ffts_full'] = np.array(qpd_ffts_full)
         agg_dict['qpd_sb_ffts'] = np.array(qpd_sb_ffts)
@@ -965,6 +963,14 @@ class AggregateData:
         agg_dict['quad_phases'] = np.array(quad_phases)
         agg_dict['sig_likes'] = np.array(sig_likes)
         self.agg_dict = agg_dict
+
+        # data that is common to all datasets is set as a class attribute
+        self.freqs = np.array(self.file_data_objs[0].freqs)
+        self.good_inds = np.array(self.file_data_objs[0].good_inds)
+        self.fund_ind = int(self.file_data_objs[0].fund_ind)
+        self.fsamp = int(self.file_data_objs[0].fsamp)
+        self.nsamp = int(self.file_data_objs[0].nsamp)
+
         print('Done building dictionary.')
         if lightweight:
             del self.file_data_objs
@@ -1123,8 +1129,7 @@ class AggregateData:
         self.cant_bins_x = cant_bins_x
         self.cant_bins_z = cant_bins_z
 
-        # add seismometer threshold as a class attribute, then update bin indices
-        self.seis_thresh = seis_thresh
+        # update bin indices
         self.bin_indices[:,5] = np.array([np.abs(np.mean(self.agg_dict['seismometer'],\
                                                          axis=1))>seis_thresh]).astype(np.int32)
         print('Done binning data.')
@@ -1232,7 +1237,7 @@ class AggregateData:
         return list(np.sort(slice_indices))
     
 
-    def get_spectral_densities(self):
+    def estimate_spectral_densities(self):
         '''
         Compute the amplitude spectral density for each axis and sensor, averaging over datasets
         with the same conditions as defined by bin_indices.
@@ -1240,14 +1245,16 @@ class AggregateData:
 
         print('Computing RMS amplitude spectral density for each set of run conditions...')
 
+        if self.agg_dict['qpd_ffts_full'].shape[-1]==1:
+            print('Error: full FFTs already dropped from the AggregateData object!')
+            return
+
         # get all unique combinations of run conditions
         index_arrays = np.unique(self.bin_indices,axis=0)
 
         # get sampling parameters in order to compute ASD from the DFTs
-        nsamp = self.agg_dict['times'].shape[1]
-        freqs = self.agg_dict['freqs'][0]
-        fsamp = 2.*freqs[-1]
-        fft_to_asd = np.sqrt(nsamp/2./fsamp)
+        freqs = self.freqs
+        fft_to_asd = np.sqrt(self.nsamp/2./self.fsamp)
 
         # initialize lists to store the spectra
         qpd_asds = []
@@ -1305,14 +1312,12 @@ class AggregateData:
                        peak_guess[1]-2*width_guess[1],peak_guess[1]+2*width_guess[1]]
 
         # get corresponding indices
-        freqs = self.agg_dict['freqs'][0]
+        freqs = self.freqs
         freq_inds = []
         for f in freq_ranges:
             freq_inds.append(np.argmin(np.abs(freqs-f)))
 
-        nsamp = self.agg_dict['quad_raw_data'][:,0,:].shape[1]
-        fsamp = 2.*freqs[-1]
-        fft_to_asd = np.sqrt(nsamp/2./fsamp)
+        fft_to_asd = np.sqrt(self.nsamp/2./self.fsamp)
 
         # get RMS of the ffts for the data used for the fit
         mean_ffts_x = np.sqrt(np.mean(np.abs(np.fft.rfft(self.agg_dict['quad_raw_data'][fit_inds][:,0,:])*2./nsamp)**2,axis=0))
@@ -1432,7 +1437,7 @@ class AggregateData:
         '''
 
         if file_indices is None:
-            file_indices = np.array(range(self.agg_dict['freqs'].shape[0]))
+            file_indices = np.array(range(self.agg_dict['times'].shape[0]))
         
         likelihood_coeffs = []
         for i in file_indices:
@@ -1701,6 +1706,16 @@ class AggregateData:
             object1 = object_list[0]
             object2 = object_list[1]
             # just add them all together
+            if (object1.fsamp!=object2.fsamp) or (object1.nsamp!=object2.nsamp):
+                print('Error: inconsistent number of samples or sampling frequency between objects!')
+                return
+            if (object1.fund_ind!=object2.fund_ind) or any(object1.good_inds!=object2.good_inds):
+                print('Error: inconsistent harmonics between objects!')
+                return
+            self.fund_ind = object1.fund_ind
+            self.nsamp = object1.nsamp
+            self.fsamp = object1.fsamp
+            self.freqs = object1.freqs
             self.data_dirs = np.array(list(object1.data_dirs) + list(object2.data_dirs))
             self.file_prefixes = np.array(list(object1.file_prefixes) + list(object2.file_prefixes))
             self.descrips = np.array(list(object1.descrips) + list(object2.descrips))
@@ -1761,8 +1776,8 @@ class AggregateData:
                     for key, value in attr_value.items():
                         # add a dataset for each column of the dictionary
                         dict_group.create_dataset(key, data=value)
-                elif isinstance(attr_value, float):
-                    # add floats
+                elif isinstance(attr_value, (float,int)):
+                    # add floats and ints
                     f.create_dataset('run_params/'+attr_name, data=attr_value)
                 elif isinstance(attr_value, np.ndarray):
                     # add numpy arrays of strings or anything else
@@ -1807,16 +1822,31 @@ class AggregateData:
             self.file_list = np.array(f['run_params/file_list'],dtype=np.str_)
             self.p0_bead = np.array(f['run_params/p0_bead'])
             self.diam_bead = np.array(f['run_params/diam_bead'])
-            self.seis_thresh = np.array(f['run_params/seis_thresh'])
             self.num_to_load = np.array(f['run_params/num_to_load'])
             self.num_files = np.array(f['run_params/num_files'])
             self.bin_indices = np.array(f['run_params/bin_indices'])
-            self.cant_bin_x = np.array(f['run_params/cant_bins_x'])
+            self.cant_bins_x = np.array(f['run_params/cant_bins_x'])
             self.cant_bins_z = np.array(f['run_params/cant_bins_z'])
             self.bad_files = np.array(f['run_params/bad_files'])
+            self.freqs = np.array(f['run_params/freqs'])
+            self.good_inds = np.array(f['run_params/good_inds'])
+            self.fund_ind = int(np.array(f['run_params/fund_ind']))
+            self.fsamp = int(np.array(f['run_params/fsamp']))
+            self.nsamp = int(np.array(f['run_params/nsamp']))
 
             # fill empty attributes
             self.file_data_objs = []
             self.signal_models = []
 
         print('Loaded AggregateData object from '+path)
+
+
+    def _print_attributes(self):
+        '''
+        Debugging tool to ensure that all attributes and types are preserved
+        through saving/loading/merging.
+        '''
+        print('ATTRIBUTE :    TYPE')
+        print('---------------------')
+        for attr_name, attr_value in vars(self).items():
+            print(attr_name,':    ',type(attr_value))
