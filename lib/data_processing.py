@@ -20,6 +20,27 @@ from stats import *
 import signals as s
 
 
+# ************************************************************************ #
+# This module contains the FileData class, used to extract data from a
+# single hdf5 file, and the AggregateData class, used to aggregate data
+# relevant to the physics analysis from many FileData objects. This code
+# builds on previous analysis code written by Chas Blakemore, Alex Rider,
+# David Moore, and others.
+
+# CONVENTIONS USED IN THIS MODULE:
+# Variables with "fft" in their name are the discrete Fourier transforms
+# of a given time series, scaled such that their magnitude at each frequency
+# gives the peak amplitude. For plotting, we prefer to show the amplitude
+# spectral density, calculated from the RMS amplitude spectrum by dividing
+# each point by the frequency bin width (equal to the sampling frequency
+# divided by the number of samples). With this definition, the square of
+# the amplitude spectral density is equal to the PSD as given by
+# scipy.signal.welch, up to the effects of overlap, windowing, and detrending.
+# 
+#                   -- Clarke Hardy, October 2023 --
+# ************************************************************************ #
+
+
 class FileData:
 
     def __init__(self,path=''):
@@ -55,9 +76,6 @@ class FileData:
         self.pspd_ffts = np.array(((),(),()))
         self.pspd_ffts_full = np.array(((),(),()))
         self.pspd_sb_ffts = np.array(((),(),()))
-        self.cross_asds = np.array(((),(),()))
-        self.cross_asds_full = np.array(((),(),()))
-        self.cross_sb_asds = np.array(((),(),()))
         self.template_ffts = np.array(())
         self.template_params = np.array(())
         self.cant_fft = np.array(())
@@ -118,36 +136,35 @@ class FileData:
         '''
         Reads raw data and metadata from an hdf5 file directly into a dict.
         '''
-        f = h5py.File(self.file_name, 'r')
         dd = {}
-        dd['cant_data'] = np.array(f['cant_data'],dtype=np.float64)
-        dd['quad_data'] = np.array(f['quad_data'],dtype=np.float64)
-        try:
-            dd['seismometer'] = np.array(f['seismometer'])
-            dd['laser_power'] = np.array(f['laser_power'])
-            dd['p_trans'] = np.array(f['p_trans'])
-            dd['pspd_data'] = np.array(f['PSPD'])
-        except:
-            dd['seismometer'] = np.zeros_like(dd['cant_data'][0])
-            dd['laser_power'] = np.zeros_like(dd['cant_data'])
-            dd['pspd_data'] = np.zeros_like(dd['cant_data'])
-            dd['p_trans'] = np.zeros_like(dd['cant_data'])
-        dd['timestamp_ns'] = os.stat(self.file_name).st_mtime*1e9
-        dd['fsamp'] = f.attrs['Fsamp']/f.attrs['downsamp']
-        try:
-            dd['cantilever_axis'] = f.attrs['cantilever_axis']
-            dd['cantilever_freq'] = f.attrs['cantilever_freq']
-            cant_voltages = list(f['cantilever_settings'])
-        except:
-            dd['cantilever_axis'] = 0
-            dd['cantilever_freq'] = 0
-            cant_voltages = np.zeros(6)
-        dd['cantilever_DC'] = [cant_voltages[i] for i in [0,2,4]]
-        dd['cantilever_amp'] = [cant_voltages[i] for i in [1,3,5]]
-        dd['bead_height'] = f.attrs['bead_height']
+        with h5py.File(self.file_name, 'r') as f:
+            dd['cant_data'] = np.array(f['cant_data'],dtype=np.float64)
+            dd['quad_data'] = np.array(f['quad_data'],dtype=np.float64)
+            try:
+                dd['seismometer'] = np.array(f['seismometer'])
+                dd['laser_power'] = np.array(f['laser_power'])
+                dd['p_trans'] = np.array(f['p_trans'])
+                dd['pspd_data'] = np.array(f['PSPD'])
+            except:
+                dd['seismometer'] = np.zeros_like(dd['cant_data'][0])
+                dd['laser_power'] = np.zeros_like(dd['cant_data'][0])
+                dd['pspd_data'] = np.zeros_like(dd['cant_data'])
+                dd['p_trans'] = np.zeros_like(dd['cant_data'][0])
+            dd['timestamp_ns'] = os.stat(self.file_name).st_mtime*1e9
+            dd['fsamp'] = f.attrs['Fsamp']/f.attrs['downsamp']
+            try:
+                dd['cantilever_axis'] = f.attrs['cantilever_axis']
+                dd['cantilever_freq'] = f.attrs['cantilever_freq']
+                cant_voltages = list(f['cantilever_settings'])
+            except:
+                dd['cantilever_axis'] = 0
+                dd['cantilever_freq'] = 0
+                cant_voltages = np.zeros(6)
+            dd['cantilever_DC'] = [cant_voltages[i] for i in [0,2,4]]
+            dd['cantilever_amp'] = [cant_voltages[i] for i in [1,3,5]]
+            dd['bead_height'] = f.attrs['bead_height']
 
         self.data_dict = dd
-        f.close()
 
     
     def get_laser_power(self):
@@ -395,22 +412,22 @@ class FileData:
         # transfer function data should be stored here in a folder named by the date
         if tf_path is None:
             tf_path = '/data/new_trap_processed/calibrations/transfer_funcs/'+str(self.date)+'/TF.h5'
-        tf_file = h5py.File(tf_path,'r')
 
-        ### Compute TF at frequencies of interest. Appropriately inverts
-        ### so we can map response -> drive
-        Harr = np.zeros((len(freqs), 3, 3), dtype=complex)
-        Harr[:,0,0] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zXX'], tf_file['fits/'+sensor+'/pXX'], \
-                                         tf_file['fits/'+sensor+'/kXX']/tf_file.attrs['scaleFactors_'+sensor][0], 2*np.pi*freqs)[1]
-        Harr[:,1,1] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zYY'], tf_file['fits/'+sensor+'/pYY'], \
-                                         tf_file['fits/'+sensor+'/kYY']/tf_file.attrs['scaleFactors_'+sensor][1], 2*np.pi*freqs)[1]
-        Harr[:,2,2] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zZZ'], tf_file['fits/'+sensor+'/pZZ'], \
-                                         tf_file['fits/'+sensor+'/kZZ']/tf_file.attrs['scaleFactors_'+sensor][2], 2*np.pi*freqs)[1]
-        tf_file.close()
+        with h5py.File(tf_path,'r') as tf_file:
+            ### Compute TF at frequencies of interest. Appropriately inverts
+            ### so we can map response -> drive
+            Harr = np.zeros((len(freqs), 3, 3), dtype=complex)
+            Harr[:,0,0] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zXX'], tf_file['fits/'+sensor+'/pXX'], \
+                                            tf_file['fits/'+sensor+'/kXX']/tf_file.attrs['scaleFactors_'+sensor][0], 2*np.pi*freqs)[1]
+            Harr[:,1,1] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zYY'], tf_file['fits/'+sensor+'/pYY'], \
+                                            tf_file['fits/'+sensor+'/kYY']/tf_file.attrs['scaleFactors_'+sensor][1], 2*np.pi*freqs)[1]
+            Harr[:,2,2] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zZZ'], tf_file['fits/'+sensor+'/pZZ'], \
+                                            tf_file['fits/'+sensor+'/kZZ']/tf_file.attrs['scaleFactors_'+sensor][2], 2*np.pi*freqs)[1]
+            tf_file.close()
 
-        # Only apply the TF to frequencies below some frequency
-        max_freq_ind = np.argmin( np.abs(freqs - max_freq) )
-        Harr[max_freq_ind+1:,:,:] = 0.0+0.0j
+            # Only apply the TF to frequencies below some frequency
+            max_freq_ind = np.argmin( np.abs(freqs - max_freq) )
+            Harr[max_freq_ind+1:,:,:] = 0.0+0.0j
 
         return Harr
     
@@ -595,11 +612,6 @@ class FileData:
         pspd_ffts = np.zeros((3, len(self.good_inds)), dtype=np.complex128)
         pspd_sb_ffts = np.zeros((3, len(self.good_inds)*noise_bins), dtype=np.complex128)
 
-        # initialize arrays for the pspd ffts of x, y, and z
-        cross_asds_full = np.zeros((3, len(self.freqs)), dtype=np.complex128)
-        cross_asds = np.zeros((3, len(self.good_inds)), dtype=np.complex128)
-        cross_sb_asds = np.zeros((3, len(self.good_inds)*noise_bins), dtype=np.complex128)
-
         # get the fft for the cantilever data along the driven axis
         cant_fft_full = np.fft.rfft(self.cant_pos_calibrated[self.drive_ind])
 
@@ -616,17 +628,12 @@ class FileData:
             # get the fft for the given axis and multiply by the calibration factor
             qpd_fft = np.fft.rfft(data_qpd[resp])
             pspd_fft = np.fft.rfft(data_pspd[resp])
-            _,cross_psd = signal.csd(data_pspd[resp],data_qpd[resp],window='boxcar',\
-                                     fs=self.fsamp,nperseg=self.nsamp)
-            cross_asd = np.sqrt(np.abs(cross_psd))*np.exp(1j*(np.angle(cross_psd)-np.angle(pspd_fft)))
 
             # add the fft to the existing array, which was initialized with zeros
             qpd_ffts_full[resp] += qpd_fft
             qpd_ffts[resp] += qpd_fft[self.good_inds]
             pspd_ffts_full[resp] += pspd_fft
             pspd_ffts[resp] += pspd_fft[self.good_inds]
-            cross_asds_full[resp] += cross_asd
-            cross_asds[resp] += cross_asd[self.good_inds]
 
             # now create a list of some number of indices on either side of the harmonic
             sideband_inds = []
@@ -652,7 +659,6 @@ class FileData:
             # finally, add the data at these indices to the array for this axis
             qpd_sb_ffts[resp] += qpd_fft[sideband_inds]
             pspd_sb_ffts[resp] += pspd_fft[sideband_inds]
-            cross_sb_asds[resp] += cross_asd[sideband_inds]
 
         # normalize the ffts
         norm_factor = 2./self.nsamp
@@ -669,12 +675,9 @@ class FileData:
         self.qpd_ffts = qpd_ffts
         self.pspd_ffts_full = pspd_ffts_full
         self.pspd_ffts = pspd_ffts
-        self.cross_asds_full = cross_asds_full
-        self.cross_asds = cross_asds
         self.cant_fft = cant_fft
         self.qpd_sb_ffts = qpd_sb_ffts
         self.pspd_sb_ffts = pspd_sb_ffts
-        self.cross_sb_asds = cross_sb_asds
 
 
     def make_templates(self,signal_model,p0_bead,cant_vec=None,num_harms=10):
@@ -895,7 +898,6 @@ class AggregateData:
         mean_cant_pos = []
         freqs = []
         good_inds = []
-        cant_inds = []
         fund_ind = []
         qpd_ffts = []
         qpd_ffts_full = []
@@ -903,9 +905,6 @@ class AggregateData:
         pspd_ffts = []
         pspd_ffts_full = []
         pspd_sb_ffts = []
-        cross_asds_full = []
-        cross_asds = []
-        cross_sb_asds = []
         template_ffts = []
         template_params = []
         cant_fft = []
@@ -925,7 +924,6 @@ class AggregateData:
             quad_raw_data.append(f.quad_raw_data)
             mean_cant_pos.append(f.mean_cant_pos)
             good_inds.append(f.good_inds)
-            cant_inds.append(f.cant_inds)
             fund_ind.append(f.fund_ind)
             freqs.append(f.freqs)
             qpd_ffts.append(f.qpd_ffts)
@@ -934,9 +932,6 @@ class AggregateData:
             pspd_ffts.append(f.pspd_ffts)
             pspd_ffts_full.append(f.pspd_ffts_full)
             pspd_sb_ffts.append(f.pspd_sb_ffts)
-            cross_asds.append(f.cross_asds)
-            cross_asds_full.append(f.cross_asds_full)
-            cross_sb_asds.append(f.cross_sb_asds)
             template_ffts.append(f.template_ffts)
             template_params.append(f.template_params)
             cant_fft.append(f.cant_fft)
@@ -950,13 +945,12 @@ class AggregateData:
         agg_dict['mean_laser_power'] = np.array(mean_laser_power)
         agg_dict['laser_power_full'] = np.array(laser_power_full)
         agg_dict['mean_p_trans'] = np.array(mean_p_trans)
-        agg_dict['p_trans_full'] = np.array([p_trans_full])
+        agg_dict['p_trans_full'] = np.array(p_trans_full)
         agg_dict['cant_raw_data'] = np.array(cant_raw_data)
         agg_dict['quad_raw_data'] = np.array(quad_raw_data)
         agg_dict['mean_cant_pos'] = np.array(mean_cant_pos)
         agg_dict['freqs'] = np.array(freqs)
         agg_dict['good_inds'] = np.array(good_inds)
-        agg_dict['cant_inds'] = np.array(cant_inds)
         agg_dict['fund_ind'] = np.array(fund_ind)
         agg_dict['qpd_ffts'] = np.array(qpd_ffts)
         agg_dict['qpd_ffts_full'] = np.array(qpd_ffts_full)
@@ -964,9 +958,6 @@ class AggregateData:
         agg_dict['pspd_ffts'] = np.array(pspd_ffts)
         agg_dict['pspd_ffts_full'] = np.array(pspd_ffts_full)
         agg_dict['pspd_sb_ffts'] = np.array(pspd_sb_ffts)
-        agg_dict['cross_asds'] = np.array(cross_asds)
-        agg_dict['cross_asds_full'] = np.array(cross_asds_full)
-        agg_dict['cross_sb_asds'] = np.array(cross_sb_asds)
         agg_dict['template_ffts'] = np.array(template_ffts)
         agg_dict['template_params'] = np.array(template_params)
         agg_dict['cant_fft'] = np.array(cant_fft)
@@ -987,7 +978,7 @@ class AggregateData:
         files are first loaded, but never by the user.
         '''
         # initialize the list of bin indices
-        self.bin_indices = np.zeros((len(self.file_list),8)).astype(np.int32)
+        self.bin_indices = np.zeros((len(self.file_list),9)).astype(np.int32)
 
         # first bin by diam_bead, p0_bead, and descrips, basically already done when the data was read in
         for i in range(len(self.num_files)):
@@ -1073,7 +1064,7 @@ class AggregateData:
         # p0_bead and diam_bead are done when data is loaded. Here, binning is done in
         # cantilever x, cantilever z, and bias. Each row of bin_indices is of the format
         # [diam_ind, p0_bead_ind, descrips, cant_x_ind, cant_z_ind, seismometer_ind, \
-        # bias_ind, is_bad]
+        # bias_ind, spec_ind, is_bad]
 
         # first create bins in x and z given the bin widths provided
         x_lower_edge = min(self.agg_dict['mean_cant_pos'][:,0]) - cant_bin_widths[0]/2.
@@ -1239,6 +1230,63 @@ class AggregateData:
             print('Warning: no data matching specified cuts!')
             
         return list(np.sort(slice_indices))
+    
+
+    def get_spectral_densities(self):
+        '''
+        Compute the amplitude spectral density for each axis and sensor, averaging over datasets
+        with the same conditions as defined by bin_indices.
+        '''
+
+        print('Computing RMS amplitude spectral density for each set of run conditions...')
+
+        # get all unique combinations of run conditions
+        index_arrays = np.unique(self.bin_indices,axis=0)
+
+        # get sampling parameters in order to compute ASD from the DFTs
+        nsamp = self.agg_dict['times'].shape[1]
+        freqs = self.agg_dict['freqs'][0]
+        fsamp = 2.*freqs[-1]
+        fft_to_asd = np.sqrt(nsamp/2./fsamp)
+
+        # initialize lists to store the spectra
+        qpd_asds = []
+        pspd_asds = []
+
+        # get a list of indices for each unique set of run conditions
+        for ind,index_array in enumerate(index_arrays):
+            unique_inds = np.where([np.all(self.bin_indices[i,:]==index_array) \
+                                      for i in range(self.bin_indices.shape[0])])[0]
+
+            # average the PSDs to get the final ASD
+            qpd_asd_x = np.sqrt(np.mean(np.abs(self.agg_dict['qpd_ffts_full'][unique_inds][:,0,:]*fft_to_asd)**2,axis=0))
+            qpd_asd_y = np.sqrt(np.mean(np.abs(self.agg_dict['qpd_ffts_full'][unique_inds][:,1,:]*fft_to_asd)**2,axis=0))
+            qpd_asd_z = np.sqrt(np.mean(np.abs(self.agg_dict['qpd_ffts_full'][unique_inds][:,2,:]*fft_to_asd)**2,axis=0))
+            pspd_asd_x = np.sqrt(np.mean(np.abs(self.agg_dict['pspd_ffts_full'][unique_inds][:,0,:]*fft_to_asd)**2,axis=0))
+            pspd_asd_y = np.sqrt(np.mean(np.abs(self.agg_dict['pspd_ffts_full'][unique_inds][:,1,:]*fft_to_asd)**2,axis=0))
+
+            qpd_asds.append(np.array((qpd_asd_x,qpd_asd_y,qpd_asd_z)))
+            pspd_asds.append(np.array((pspd_asd_x,pspd_asd_y)))
+
+            # update the bin indices
+            self.bin_indices[:,7][unique_inds] = ind
+
+        # add as class attributes
+        self.qpd_asds = np.array(qpd_asds)
+        self.pspd_asds = np.array(pspd_asds)
+
+        print('Amplitude spectral densities computed for {} sets of run conditions.'.format(self.qpd_asds.shape[0]))
+    
+
+    def drop_full_ffts(self):
+        '''
+        Drops the complete spectra for each file from the dictionary to save memory. To be called
+        after the data has been used for basic plotting.
+        '''
+
+        # keep the first two dimensions the same to avoid screwing up indexing
+        self.agg_dict['qpd_ffts_full'] = np.empty_like(self.agg_dict['qpd_ffts_full'][:,:,0])[...,np.newaxis]
+        self.agg_dict['pspd_ffts_full'] = np.empty_like(self.agg_dict['pspd_ffts_full'][:,:,0])[...,np.newaxis]
 
 
     def diagonalize_qpd(self,fit_inds=None,peak_guess=[400.,370.],width_guess=[10.,10.],plot=False):
@@ -1263,8 +1311,10 @@ class AggregateData:
             freq_inds.append(np.argmin(np.abs(freqs-f)))
 
         nsamp = self.agg_dict['quad_raw_data'][:,0,:].shape[1]
+        fsamp = 2.*freqs[-1]
+        fft_to_asd = np.sqrt(nsamp/2./fsamp)
 
-        # get mean of the ffts for the data used for the fit
+        # get RMS of the ffts for the data used for the fit
         mean_ffts_x = np.sqrt(np.mean(np.abs(np.fft.rfft(self.agg_dict['quad_raw_data'][fit_inds][:,0,:])*2./nsamp)**2,axis=0))
         mean_ffts_y = np.sqrt(np.mean(np.abs(np.fft.rfft(self.agg_dict['quad_raw_data'][fit_inds][:,1,:])*2./nsamp)**2,axis=0))
 
@@ -1309,10 +1359,10 @@ class AggregateData:
 
         if plot:
             fig,ax = plt.subplots(2,1,sharex=True)
-            ax[0].semilogy(freqs,np.abs(fft_qpd_1),label='Q1')
-            ax[0].semilogy(freqs,np.abs(fft_qpd_2),label='Q2')
-            ax[0].semilogy(freqs,np.abs(fft_qpd_3),label='Q3')
-            ax[0].semilogy(freqs,np.abs(fft_qpd_4),label='Q4')
+            ax[0].semilogy(freqs,np.abs(fft_qpd_1)*fft_to_asd,label='Q1')
+            ax[0].semilogy(freqs,np.abs(fft_qpd_2)*fft_to_asd,label='Q2')
+            ax[0].semilogy(freqs,np.abs(fft_qpd_3)*fft_to_asd,label='Q3')
+            ax[0].semilogy(freqs,np.abs(fft_qpd_4)*fft_to_asd,label='Q4')
             ax[1].plot(freqs,np.angle(fft_qpd_1)*180./np.pi,'.',ms='2',label='Q1')
             ax[1].plot(freqs,np.angle(fft_qpd_2)*180./np.pi,'.',ms='2',label='Q2')
             ax[1].plot(freqs,np.angle(fft_qpd_3)*180./np.pi,'.',ms='2',label='Q3')
@@ -1399,12 +1449,8 @@ class AggregateData:
 
         lambdas = self.agg_dict['template_params'][file_index]
         yuk_ffts = self.agg_dict['template_ffts'][file_index]
-        if sensor=='both':
-            bead_ffts = self.agg_dict['cross_asds'][file_index]
-            bead_sb_ffts = self.agg_dict['cross_sb_asds'][file_index]
-        else:
-            bead_ffts = self.agg_dict[sensor+'_ffts'][file_index]
-            bead_sb_ffts = self.agg_dict[sensor+'_sb_ffts'][file_index]
+        bead_ffts = self.agg_dict[sensor+'_ffts'][file_index]
+        bead_sb_ffts = self.agg_dict[sensor+'_sb_ffts'][file_index]
         num_sb = int(bead_sb_ffts.shape[1]/bead_ffts.shape[1])
         good_inds = self.agg_dict['good_inds'][file_index]
         sig_likes = self.agg_dict['sig_likes'][file_index][:,good_inds]
@@ -1774,7 +1820,3 @@ class AggregateData:
             self.signal_models = []
 
         print('Loaded AggregateData object from '+path)
-        
-
-
-                    
