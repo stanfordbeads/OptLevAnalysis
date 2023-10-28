@@ -26,6 +26,6 @@ if descrip=='':
 # create and save AggregateData object
 aggdat = AggregateData([path],[prefix],[descrip])
 aggdat.load_yukawa_model(lambda_range=[1e-6,1e-4],num_lambdas=25)
-aggdat.load_file_data(num_cores=num_cores,load_templates=load_templates)
+aggdat.load_file_data(num_cores=num_cores,load_templates=load_templates,harms=[3,5,6,8,9,11,12])
 aggdat.bin_by_aux_data()
 aggdat.save_to_hdf5(output_file)

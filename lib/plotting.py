@@ -8,17 +8,17 @@ import h5py
 from funcs import *
 
 
-def polar_plots(agg_dict,indices=None,axis_ind=0,first_harm=2,sensor='qpd',\
+def polar_plots(agg_dict,indices=None,axis_ind=0,sensor='qpd',\
                 amp_bins=np.logspace(-17,-15, 30),phase_bins=np.linspace(-np.pi,np.pi,60),\
-                    vmax=50,plot_templates=True,alphas=np.array((1e8,1e9,1e10))):
+                vmax=50,plot_templates=True,alphas=np.array((1e8,1e9,1e10))):
     '''
     Plot 2d polar histograms binning the datasets by the amplitude and phase at a particular
     harmonic along a given axes.
     '''
     if indices is None:
         indices = np.array(range(agg_dict['qpd_ffts'].shape[0]))
-    freqs = agg_dict['freqs'][0]
-    harms = freqs[agg_dict['good_inds'][0]]
+    freqs = agg_dict['freqs']
+    harms = freqs[agg_dict['good_inds']]
     cmap_polar = plt.get_cmap('inferno') 
     cmap_polar.set_under(color='white')
     axes = ['X','Y','Z']
@@ -26,31 +26,29 @@ def polar_plots(agg_dict,indices=None,axis_ind=0,first_harm=2,sensor='qpd',\
     fig,axs = plt.subplots(2, 4, figsize=(16,9), subplot_kw={'projection':'polar'})
     # loop through harmonics
     for h,ax in zip(range(len(harms)), axs.flatten()[:-1]):
-        if sensor=='both':
-            ffts = agg_dict['cross_asds'][indices][:,axis_ind,first_harm+h-1]
-            sens_title = 'CSD'
-        else:
-            ffts = agg_dict[sensor+'_ffts'][indices][:,axis_ind,first_harm+h-1]
-            sens_title = sensor.upper()
+        ffts = agg_dict[sensor+'_ffts'][indices][:,axis_ind,h]
+        sens_title = sensor.upper()
         _,_,_,im = ax.hist2d(np.angle(ffts),np.abs(ffts),bins=(phase_bins,amp_bins),cmap=cmap_polar,vmin=1,vmax=vmax)
         if plot_templates:
-            yuk_ffts = agg_dict['template_ffts'][indices][first_harm+h-1]
-            lambdas = agg_dict['template_params'][indices][first_harm+h-1]
+            yuk_ffts = agg_dict['template_ffts'][indices][h]
+            lambdas = agg_dict['template_params'][indices][h]
             ten_um_ind = np.argmin(np.abs(lambdas-1e-5))
-            ax.plot(np.angle(-1*yuk_ffts[ten_um_ind,axis_ind,first_harm+h-1])*np.ones(4),\
+            ax.plot(np.angle(-1*yuk_ffts[ten_um_ind,axis_ind,h])*np.ones(4),\
                     [1e-18,1e-17,1e-16, 1e-15], markersize=10, color='xkcd:electric green', ls='dotted', lw=5)
-            ax.plot(np.angle(-1*np.ones(len(alphas))*yuk_ffts[ten_um_ind,axis_ind,first_harm+h-1]),\
-                    np.abs(yuk_ffts[ten_um_ind,axis_ind,first_harm+h-1])*alphas,\
+            ax.plot(np.angle(-1*np.ones(len(alphas))*yuk_ffts[ten_um_ind,axis_ind,h]),\
+                    np.abs(yuk_ffts[ten_um_ind,axis_ind,h])*alphas,\
                     color='xkcd:electric green',ls='none',marker='d',ms=10)
-            ax.plot(np.angle(yuk_ffts[ten_um_ind,axis_ind,first_harm+h-1])*np.ones(4),\
+            ax.plot(np.angle(yuk_ffts[ten_um_ind,axis_ind,h])*np.ones(4),\
                     [1e-18,1e-17,1e-16, 1e-15], markersize=10, color='xkcd:neon blue', ls='dotted', lw=5)
-            ax.plot(np.angle(np.ones(len(alphas))*yuk_ffts[ten_um_ind,axis_ind,first_harm+h-1]),\
-                    np.abs(yuk_ffts[ten_um_ind,axis_ind,first_harm+h-1])*alphas,\
+            ax.plot(np.angle(np.ones(len(alphas))*yuk_ffts[ten_um_ind,axis_ind,h]),\
+                    np.abs(yuk_ffts[ten_um_ind,axis_ind,h])*alphas,\
                     color='xkcd:neon blue',ls='none',marker='d',ms=10)
         ax.set_yscale('log')
         ax.set_yticks([])
         ax.set_yticklabels([])
-        ax.set_title('{:.0f} Hz'.format(harms[h+first_harm-1]),fontsize=18)
+        ax.set_xticks(np.array([0,90,180,270])*np.pi/180.)
+        ax.set_thetalim(0,2*np.pi)
+        ax.set_title('{:.0f} Hz'.format(harms[h]),fontsize=18)
         ax.grid(False)
     axs.flatten()[-1].axis('off')
 
@@ -147,9 +145,10 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None):
     raw_qpd_3 = raw_qpd_3/tot_vs_time
     raw_qpd_4 = raw_qpd_4/tot_vs_time
 
-    freqs = agg_dict['freqs'][0]
-    nsamp = raw_qpd_1.shape[1]
-    fsamp = 2.*freqs[-1]
+    freqs = agg_dict['freqs']
+    fsamp = agg_dict['fsamp']
+    nsamp = agg_dict['nsamp']
+    fft_to_asd = np.sqrt(nsamp/2./fsamp)
 
     signal_mat = np.array((raw_qpd_1,raw_qpd_2,raw_qpd_3,raw_qpd_4))
 
@@ -166,10 +165,10 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None):
     x_corr = new_resp[0,:,:]
     y_corr = new_resp[1,:,:]
 
-    asd_x_raw = np.sqrt(np.mean(np.abs(np.fft.rfft(x_raw))**2*2./nsamp/fsamp,axis=0))
-    asd_y_raw = np.sqrt(np.mean(np.abs(np.fft.rfft(y_raw))**2*2./nsamp/fsamp,axis=0))
-    asd_x_corr = np.sqrt(np.mean(np.abs(np.fft.rfft(x_corr))**2*2./nsamp/fsamp,axis=0))
-    asd_y_corr = np.sqrt(np.mean(np.abs(np.fft.rfft(y_corr))**2*2./nsamp/fsamp,axis=0))
+    asd_x_raw = np.sqrt(np.mean(np.abs(np.fft.rfft(x_raw)*fft_to_asd)**2,axis=0))
+    asd_y_raw = np.sqrt(np.mean(np.abs(np.fft.rfft(y_raw)*fft_to_asd)**2,axis=0))
+    asd_x_corr = np.sqrt(np.mean(np.abs(np.fft.rfft(x_corr)*fft_to_asd)**2,axis=0))
+    asd_y_corr = np.sqrt(np.mean(np.abs(np.fft.rfft(y_corr)*fft_to_asd)**2,axis=0))
 
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     fig,ax = plt.subplots()
@@ -181,7 +180,7 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None):
         ax.semilogy(freqs,lor(freqs,*p_x),label='Peak fit $x$',color=colors[2])
         ax.semilogy(freqs,lor(freqs,*p_y),label='Peak fit $y$',color=colors[3])
     ax.set_xlim([280,420])
-    ax.set_ylim([1e-6,1e-2])
+    ax.set_ylim([1e-2,1e2])
     ax.set_xlabel('Frequency [Hz]')
     ax.set_ylabel('ASD [1/$\sqrt{\mathrm{Hz}}$]')
     ax.set_title('QPD Diagonalization')
@@ -272,9 +271,9 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None):
     if descrip is None:
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
 
-    freqs = agg_dict['freqs'][0]
-    nsamp = agg_dict['times'].shape[1]
-    fsamp = 2.*freqs[-1]
+    freqs = agg_dict['freqs']
+    fsamp = agg_dict['fsamp']
+    nsamp = agg_dict['nsamp']
     fft_to_asd = np.sqrt(nsamp/2./fsamp)
 
     qpd_x_asds = np.abs(agg_dict['qpd_ffts_full'][:,0,:]*fft_to_asd)
@@ -347,9 +346,9 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
     if descrip is None:
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
 
-    freqs = agg_dict['freqs'][0]
-    nsamp = agg_dict['times'].shape[1]
-    fsamp = 2.*freqs[-1]
+    freqs = agg_dict['freqs']
+    fsamp = agg_dict['fsamp']
+    nsamp = agg_dict['nsamp']
     fft_to_asd = np.sqrt(nsamp/2./fsamp)
     asds = np.abs(agg_dict[sensor+'_ffts_full'][:,axis_ind,:])*fft_to_asd
 
@@ -429,11 +428,11 @@ def time_evolution(agg_dict,descrip=None,sensor='qpd',axis_ind=0,\
     av_times = np.mean(times,axis=1)
     start_date = datetime.fromtimestamp(av_times[0]*1e-9).strftime('%b %d, %H:%M:%S')
     hours = (av_times-av_times[0])*1e-9/3600.
-    freqs = agg_dict['freqs'][0]
-    nsamp = agg_dict['times'].shape[1]
-    fsamp = 2.*freqs[-1]
+    freqs = agg_dict['freqs']
+    fsamp = agg_dict['fsamp']
+    nsamp = agg_dict['nsamp']
     fft_to_asd = np.sqrt(nsamp/2./fsamp)
-    good_freqs = freqs[agg_dict['good_inds'][0]]
+    good_freqs = freqs[agg_dict['good_inds']]
     axes = ['x','y','z']
     colors = plt.get_cmap('plasma',len(good_freqs)+1)
 
