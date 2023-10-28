@@ -760,6 +760,7 @@ class AggregateData:
         else:
             if len(num_to_load) != len(data_dirs):
                 raise Exception('Error: length of data_dirs and num_to_load do not match.')
+        # anything added here should be properly handled in merge_objects() and load_from_hdf5()
         self.num_to_load = np.array(num_to_load)
         self.num_files = np.array([])
         self.file_list = np.array([])
@@ -768,15 +769,18 @@ class AggregateData:
         self.file_data_objs = []
         self.bin_indices = np.array(())
         self.agg_dict = {}
-        self.freqs = np.array(())
-        self.good_inds = np.array(())
-        self.fund_ind = 0
-        self.fsamp = 0
-        self.nsamp = 0
+        # self.freqs = np.array(())
+        # self.good_inds = np.array(())
+        # self.fund_ind = 0
+        # self.fsamp = 0
+        # self.nsamp = 0
         self.cant_bins_x = np.array((0,))
         self.cant_bins_z = np.array((0,))
         self.bad_files = np.array([])
+        self.qpd_asds = np.array(())
+        self.pspd_asds = np.array(())
         self.signal_models = []
+        self.lightweight = True
 
 
     def get_file_list(self,no_config=False):
@@ -847,6 +851,7 @@ class AggregateData:
             print('Warning: {} files could not be loaded.'.format(len(self.bad_files)))
         print('Successfully loaded {} files.'.format(len(self.file_list)))
         self.__build_dict(lightweight=lightweight)
+        self.lightweight = lightweight
 
 
     def load_yukawa_model(self,lambda_range=[1e-6,1e-5],num_lambdas=None):
@@ -962,14 +967,15 @@ class AggregateData:
         agg_dict['quad_amps'] = np.array(quad_amps)
         agg_dict['quad_phases'] = np.array(quad_phases)
         agg_dict['sig_likes'] = np.array(sig_likes)
-        self.agg_dict = agg_dict
 
-        # data that is common to all datasets is set as a class attribute
-        self.freqs = np.array(self.file_data_objs[0].freqs)
-        self.good_inds = np.array(self.file_data_objs[0].good_inds)
-        self.fund_ind = int(self.file_data_objs[0].fund_ind)
-        self.fsamp = int(self.file_data_objs[0].fsamp)
-        self.nsamp = int(self.file_data_objs[0].nsamp)
+        # # data that is common to all datasets is added only once
+        agg_dict['freqs'] = np.array(self.file_data_objs[0].freqs)
+        agg_dict['fsamp'] = int(self.file_data_objs[0].fsamp)
+        agg_dict['nsamp'] = int(self.file_data_objs[0].nsamp)
+        agg_dict['fund_ind'] = int(self.file_data_objs[0].fund_ind)
+        agg_dict['good_inds'] = np.array(self.file_data_objs[0].good_inds)
+
+        self.agg_dict = agg_dict
 
         print('Done building dictionary.')
         if lightweight:
@@ -1135,7 +1141,7 @@ class AggregateData:
         print('Done binning data.')
         
 
-    def get_slice_indices(self,diam_bead=-1.,descrip='',cant_x=[0.,1e4],cant_z=[0.,1e4],seis_veto=False):
+    def get_slice_indices(self,diam_bead=-1.,descrip='',cant_x=[-1e4,1e4],cant_z=[-1e4,1e4],seis_veto=False):
         '''
         Returns a single list of indices corresponding to the positions of files that pass the
         cuts given by the index array.
@@ -1158,7 +1164,7 @@ class AggregateData:
             diam_bead_inds = np.where(np.isclose(self.diam_bead,diam_bead))[0]
         if not len(diam_bead_inds):
             raise Exception('Error: no data for bead diameter {} um!'.format(diam_bead))
-        
+
         # create a list containing the indices corresponding to the descrips selected, again
         # taking either a list or a string
         if type(descrip) is list:
@@ -1192,7 +1198,7 @@ class AggregateData:
             raise Exception('Error: cantilever x position range must be given in the format [lower, upper]!')
         if not len(cant_x_inds):
             raise Exception('Error: no bins found for the given range of cantilever x position!')
-        
+
         # same for cantilever z
         if type(cant_z) is list:
             if (len(cant_z)==2):
@@ -1218,7 +1224,7 @@ class AggregateData:
         # get all possible combinations of the indices found above
         p0_bead_inds = list(range(len(self.p0_bead)))
         index_arrays = np.array([i for i in product(diam_bead_inds,p0_bead_inds,descrip_inds,\
-                                                    cant_x_inds,cant_z_inds,seis_inds,[0],[0])])
+                                                    cant_x_inds,cant_z_inds,seis_inds,[0],[0],[0])])
 
         # needs to be updated to take a range of acceptable indices for any given dimension
         # then we will get a list of index_arrays and loop through doing this step to append
@@ -1243,7 +1249,7 @@ class AggregateData:
         with the same conditions as defined by bin_indices.
         '''
 
-        print('Computing RMS amplitude spectral density for each set of run conditions...')
+        print('Estimating RMS amplitude spectral density for each set of run conditions...')
 
         if self.agg_dict['qpd_ffts_full'].shape[-1]==1:
             print('Error: full FFTs already dropped from the AggregateData object!')
@@ -1253,8 +1259,8 @@ class AggregateData:
         index_arrays = np.unique(self.bin_indices,axis=0)
 
         # get sampling parameters in order to compute ASD from the DFTs
-        freqs = self.freqs
-        fft_to_asd = np.sqrt(self.nsamp/2./self.fsamp)
+        freqs = self.agg_dict['freqs']
+        fft_to_asd = np.sqrt(self.agg_dict['nsamp']/2./self.agg_dict['fsamp'])
 
         # initialize lists to store the spectra
         qpd_asds = []
@@ -1282,7 +1288,7 @@ class AggregateData:
         self.qpd_asds = np.array(qpd_asds)
         self.pspd_asds = np.array(pspd_asds)
 
-        print('Amplitude spectral densities computed for {} sets of run conditions.'.format(self.qpd_asds.shape[0]))
+        print('Amplitude spectral densities estimated for {} sets of run conditions.'.format(self.qpd_asds.shape[0]))
     
 
     def drop_full_ffts(self):
@@ -1312,16 +1318,18 @@ class AggregateData:
                        peak_guess[1]-2*width_guess[1],peak_guess[1]+2*width_guess[1]]
 
         # get corresponding indices
-        freqs = self.freqs
+        freqs = self.agg_dict['freqs']
         freq_inds = []
         for f in freq_ranges:
             freq_inds.append(np.argmin(np.abs(freqs-f)))
 
-        fft_to_asd = np.sqrt(self.nsamp/2./self.fsamp)
+        fft_to_asd = np.sqrt(self.agg_dict['nsamp']/2./self.agg_dict['fsamp'])
 
         # get RMS of the ffts for the data used for the fit
-        mean_ffts_x = np.sqrt(np.mean(np.abs(np.fft.rfft(self.agg_dict['quad_raw_data'][fit_inds][:,0,:])*2./nsamp)**2,axis=0))
-        mean_ffts_y = np.sqrt(np.mean(np.abs(np.fft.rfft(self.agg_dict['quad_raw_data'][fit_inds][:,1,:])*2./nsamp)**2,axis=0))
+        mean_ffts_x = np.sqrt(np.mean(np.abs(np.fft.rfft(self.agg_dict['quad_raw_data'][fit_inds][:,0,:])\
+                                             *fft_to_asd)**2,axis=0))
+        mean_ffts_y = np.sqrt(np.mean(np.abs(np.fft.rfft(self.agg_dict['quad_raw_data'][fit_inds][:,1,:])\
+                                             *fft_to_asd)**2,axis=0))
 
         # resonant frequency in y is lower
         max_ind_x = freq_inds[0] + np.argmax(mean_ffts_x[freq_inds[0]:freq_inds[1]])
@@ -1357,17 +1365,17 @@ class AggregateData:
         # get the ffts and phase shift them relative to quadrant 1
         fft_qpd_1_all = np.fft.rfft(raw_qpd_1)
         phase_qpd_1 = np.angle(fft_qpd_1_all)
-        fft_qpd_1 = np.mean(fft_qpd_1_all*np.exp(-1j*phase_qpd_1)*2./nsamp,axis=0)
-        fft_qpd_2 = np.mean(np.fft.rfft(raw_qpd_2)*np.exp(-1j*phase_qpd_1)*2./nsamp,axis=0)
-        fft_qpd_3 = np.mean(np.fft.rfft(raw_qpd_3)*np.exp(-1j*phase_qpd_1)*2./nsamp,axis=0)
-        fft_qpd_4 = np.mean(np.fft.rfft(raw_qpd_4)*np.exp(-1j*phase_qpd_1)*2./nsamp,axis=0)
+        fft_qpd_1 = np.mean(fft_qpd_1_all*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['nsamp'],axis=0)
+        fft_qpd_2 = np.mean(np.fft.rfft(raw_qpd_2)*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['nsamp'],axis=0)
+        fft_qpd_3 = np.mean(np.fft.rfft(raw_qpd_3)*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['nsamp'],axis=0)
+        fft_qpd_4 = np.mean(np.fft.rfft(raw_qpd_4)*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['nsamp'],axis=0)
 
         if plot:
             fig,ax = plt.subplots(2,1,sharex=True)
-            ax[0].semilogy(freqs,np.abs(fft_qpd_1)*fft_to_asd,label='Q1')
-            ax[0].semilogy(freqs,np.abs(fft_qpd_2)*fft_to_asd,label='Q2')
-            ax[0].semilogy(freqs,np.abs(fft_qpd_3)*fft_to_asd,label='Q3')
-            ax[0].semilogy(freqs,np.abs(fft_qpd_4)*fft_to_asd,label='Q4')
+            ax[0].semilogy(freqs,np.abs(fft_qpd_1)*fft_to_asd,alpha=0.65,label='Q1')
+            ax[0].semilogy(freqs,np.abs(fft_qpd_2)*fft_to_asd,alpha=0.65,label='Q2')
+            ax[0].semilogy(freqs,np.abs(fft_qpd_3)*fft_to_asd,alpha=0.65,label='Q3')
+            ax[0].semilogy(freqs,np.abs(fft_qpd_4)*fft_to_asd,alpha=0.65,label='Q4')
             ax[1].plot(freqs,np.angle(fft_qpd_1)*180./np.pi,'.',ms='2',label='Q1')
             ax[1].plot(freqs,np.angle(fft_qpd_2)*180./np.pi,'.',ms='2',label='Q2')
             ax[1].plot(freqs,np.angle(fft_qpd_3)*180./np.pi,'.',ms='2',label='Q3')
@@ -1702,20 +1710,49 @@ class AggregateData:
         then immediately call this function, passing in a list of the objects to be merged.
         The binning should then be done again to ensure the indices are set correctlly.
         '''
+        print('Merging {} objects...'.format(len(object_list)))
+
+        # consistency checks before merging
+        ffts = []
+        asds = []
+        fsamps = []
+        nsamps = []
+        fund_inds = []
+        good_inds = []
+        lightweights = []
+        for object in object_list:
+            ffts.append(object.agg_dict['qpd_ffts_full'].shape[-1]>2)
+            asds.append(object.qpd_asds.shape[-1]>2)
+            fsamps.append(object.agg_dict['fsamp'])
+            nsamps.append(object.agg_dict['nsamp'])
+            fund_inds.append(object.agg_dict['fund_ind'])
+            good_inds.append(object.agg_dict['good_inds'])
+            lightweights.append(object.lightweight)
+        if not (all(np.isclose(np.array(fsamps)-fsamps[0],0)) or \
+                all(np.isclose(np.array(nsamps)-nsamps[0],0))):
+            print('Error: inconsistent number of samples or sampling frequency between objects!')
+            return
+        if not (all(np.isclose(np.mean(good_inds,axis=0)-np.array(good_inds[0]),0)) or \
+                all(np.isclose(np.array(fund_inds)-fund_inds[0],0))):
+            print('Error: inconsistent fundamental frequency or harmonics between objects!')
+            return
+        if not all(np.array(lightweights)==lightweights[0]):
+            print('Error: cannot merge a lightweight object with a full object!')
+            return
+        merge_asds = True
+        if not all(asds):
+            print('Warning: not all objects have spectral density estimates. Skipping this attribute...')
+            merge_asds = False
+        if not all(ffts):
+            print('Warning: not all objects have the full FFTs. Skipping this dictionary entry...')
+            [object.drop_full_ffts() for object in object_list]
+        
+        # loop through and add in pairs
         while(len(object_list)>1):
             object1 = object_list[0]
             object2 = object_list[1]
             # just add them all together
-            if (object1.fsamp!=object2.fsamp) or (object1.nsamp!=object2.nsamp):
-                print('Error: inconsistent number of samples or sampling frequency between objects!')
-                return
-            if (object1.fund_ind!=object2.fund_ind) or any(object1.good_inds!=object2.good_inds):
-                print('Error: inconsistent harmonics between objects!')
-                return
-            self.fund_ind = object1.fund_ind
-            self.nsamp = object1.nsamp
-            self.fsamp = object1.fsamp
-            self.freqs = object1.freqs
+            self.lightweight = object1.lightweight
             self.data_dirs = np.array(list(object1.data_dirs) + list(object2.data_dirs))
             self.file_prefixes = np.array(list(object1.file_prefixes) + list(object2.file_prefixes))
             self.descrips = np.array(list(object1.descrips) + list(object2.descrips))
@@ -1737,9 +1774,18 @@ class AggregateData:
             # the indices in the remaining columns are wrong once objects are added together. Just remove
             # the indices to avoid confusion. They'll be set again once bin_by_aux_data is called.
             self.bin_indices[:,3:] = 0
+            # merge amplitude spectral densities if they are all present
+            if merge_asds:
+                self.qpd_asds = np.concatenate((object1.qpd_asds,object2.qpd_asds),axis=0)
+            # merge the agg_dicts
             agg_dict = {}
             for k in object1.agg_dict.keys():
-                agg_dict[k] = np.concatenate((object1.agg_dict[k],object2.agg_dict[k]))
+                if len(np.shape(object1.agg_dict[k]))>0:
+                    # concatentate the arrays
+                    agg_dict[k] = np.concatenate((object1.agg_dict[k],object2.agg_dict[k]))
+                else:
+                    # and just take the first of the scalars
+                    agg_dict[k] = object1.agg_dict[k]
             self.agg_dict = agg_dict
             self.__remove_duplicate_bead_params()
             object_list = [deepcopy(self)] + object_list[2:]
@@ -1816,6 +1862,7 @@ class AggregateData:
             self.agg_dict = agg_dict
 
             # load the run parameters
+            self.lightweight = bool(np.array(f['run_params/lightweight']))
             self.data_dirs = np.array(f['run_params/data_dirs'],dtype=np.str_)
             self.file_prefixes = np.array(f['run_params/file_prefixes'],dtype=np.str_)
             self.descrips = np.array(f['run_params/descrips'],dtype=np.str_)
@@ -1828,11 +1875,8 @@ class AggregateData:
             self.cant_bins_x = np.array(f['run_params/cant_bins_x'])
             self.cant_bins_z = np.array(f['run_params/cant_bins_z'])
             self.bad_files = np.array(f['run_params/bad_files'])
-            self.freqs = np.array(f['run_params/freqs'])
-            self.good_inds = np.array(f['run_params/good_inds'])
-            self.fund_ind = int(np.array(f['run_params/fund_ind']))
-            self.fsamp = int(np.array(f['run_params/fsamp']))
-            self.nsamp = int(np.array(f['run_params/nsamp']))
+            self.qpd_asds = np.array(f['run_params/qpd_asds'])
+            self.pspd_asds = np.array(f['run_params/pspd_asds'])
 
             # fill empty attributes
             self.file_data_objs = []
