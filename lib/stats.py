@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.optimize import curve_fit, minimize
+from scipy.optimize import minimize
 from scipy.stats import chi2,norm
 from funcs import *
 
@@ -108,7 +108,7 @@ def group_likelihoods_by_test(likelihood_coeffs,axis=None):
     # final array should have shape (harmonic, lambda, NLL coefficients)
     if axis==None:
         likelihood_coeffs = likelihood_coeffs.reshape((int(likelihood_coeffs.shape[0]*likelihood_coeffs.shape[1]),\
-                                                        likelihood_coeffs.shape[2],likelihood_coeffs.shape[3]))
+                                                       likelihood_coeffs.shape[2],likelihood_coeffs.shape[3]))
     else:
         likelihood_coeffs = likelihood_coeffs[axis,:,:,:]
     

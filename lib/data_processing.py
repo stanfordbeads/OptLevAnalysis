@@ -435,6 +435,10 @@ class FileData:
         Extracts the interpolated transfer function array from a .trans file and returns it.
         '''
 
+        # this tends to cause a ton of divide by zero errors that are handled later, so
+        # just temporarily disable warnings
+        np.seterr(all='ignore')
+
         # get the .trans file from the specified path and load the fits and interpolated data
         Hfunc = pickle.load(open(tf_path, 'rb'))
         fits, interps = Hfunc
@@ -767,11 +771,6 @@ class AggregateData:
         self.file_data_objs = []
         self.bin_indices = np.array(())
         self.agg_dict = {}
-        # self.freqs = np.array(())
-        # self.good_inds = np.array(())
-        # self.fund_ind = 0
-        # self.fsamp = 0
-        # self.nsamp = 0
         self.cant_bins_x = np.array((0,))
         self.cant_bins_z = np.array((0,))
         self.bad_files = np.array([])
@@ -781,7 +780,7 @@ class AggregateData:
         self.lightweight = True
 
 
-    def get_file_list(self,no_config=False):
+    def __get_file_list(self,no_config=False):
         '''
         Get a list of all file paths given the directories and prefixes specified
         when the object was created and set it as an object attribute.
@@ -831,7 +830,7 @@ class AggregateData:
                 return
             signal_models = self.signal_models
         else:
-            self.get_file_list(no_config=no_config)
+            self.__get_file_list(no_config=no_config)
             signal_models = [None]*len(self.diam_bead)
         print('Loading data from {} files...'.format(len(self.file_list)))
         file_data_objs = Parallel(n_jobs=num_cores)(delayed(self.process_file)\
@@ -856,7 +855,7 @@ class AggregateData:
         '''
         Load functions used to make Yukawa-modified gravity templates
         '''
-        self.get_file_list()
+        self.__get_file_list()
         signal_models = []
         for diam in self.diam_bead:
             if str(diam)[0]=='7':
@@ -1137,6 +1136,28 @@ class AggregateData:
         self.bin_indices[:,5] = np.array([np.abs(np.mean(self.agg_dict['seismometer'],\
                                                          axis=1))>seis_thresh]).astype(np.int32)
         print('Done binning data.')
+
+
+    def get_parameter_arrays(self):
+        '''
+        Returns arrays of the config data and auxiliary data for use in indexing files within the
+        AggregateData object. This should be updated as more bins are added to bin_indices.
+        '''
+
+        # define all parameters to be returned here
+        labels = ['diam_bead', 'p0_bead', 'descrips', 'cant_bins_x', 'cant_bins_z']
+        print('Returning a tuple of the following arrays:')
+        print('('+', '.join(labels)+')')
+
+        # then make sure they are indexed properly here
+        diams = self.diam_bead[self.bin_indices[:,0]]
+        p0s = self.p0_bead[self.bin_indices[:,1]]
+        descrips = self.descrips[self.bin_indices[:,2]]
+        cant_xs = self.cant_bins_x[self.bin_indices[:,3]]
+        cant_zs = self.cant_bins_z[self.bin_indices[:,4]]
+
+        # return the results
+        return diams,p0s,descrips,cant_xs,cant_zs
         
 
     def get_slice_indices(self,diam_bead=-1.,descrip='',cant_x=[-1e4,1e4],cant_z=[-1e4,1e4],seis_veto=False):
@@ -1218,11 +1239,14 @@ class AggregateData:
             seis_inds = [0]
         else:
             seis_inds = [0,1]
+
+        # amplitude spectral density indices. should be degenerate with all others
+        asd_inds = list(range(max(self.bin_indices[:,7]+1)))
         
         # get all possible combinations of the indices found above
         p0_bead_inds = list(range(len(self.p0_bead)))
         index_arrays = np.array([i for i in product(diam_bead_inds,p0_bead_inds,descrip_inds,\
-                                                    cant_x_inds,cant_z_inds,seis_inds,[0],[0],[0])])
+                                                    cant_x_inds,cant_z_inds,seis_inds,[0],asd_inds,[0])])
 
         # needs to be updated to take a range of acceptable indices for any given dimension
         # then we will get a list of index_arrays and loop through doing this step to append
