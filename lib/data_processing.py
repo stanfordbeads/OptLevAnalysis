@@ -842,6 +842,10 @@ class AggregateData:
             if file_data_obj.is_bad == True:
                 self.bin_indices[i,-1] = 1
         self.file_data_objs = file_data_objs
+        # delete the reference to the data or else the data will all be kept in memory
+        # later after being copied to the dictionary as numpy arrays. this is
+        # necessary to avoid memory errors when loading large AggregateData objects
+        del file_data_objs
         # remove the bad files from all relevant class variables
         self.__purge_bad_files()
         if len(self.bad_files):
@@ -891,9 +895,16 @@ class AggregateData:
         '''
 
         print('Building dictionary of file data...')
+        agg_dict = {}
+
+        # data that is common to all datasets is added only once
+        agg_dict['freqs'] = np.array(self.file_data_objs[0].freqs)
+        agg_dict['fsamp'] = int(self.file_data_objs[0].fsamp)
+        agg_dict['nsamp'] = int(self.file_data_objs[0].nsamp)
+        agg_dict['fund_ind'] = int(self.file_data_objs[0].fund_ind)
+        agg_dict['good_inds'] = np.array(self.file_data_objs[0].good_inds)
 
         # data that is unique to each file goes in agg_dict
-        agg_dict = {}
         times = []
         timestamp = []
         seismometer = []
@@ -917,7 +928,8 @@ class AggregateData:
         quad_amps = []
         quad_phases = []
         sig_likes = []
-        for f in self.file_data_objs:
+
+        for i,f in enumerate(self.file_data_objs):
             timestamp.append(f.times[0]*1e-9)
             times.append(f.times)
             seismometer.append(f.seismometer)
@@ -941,43 +953,66 @@ class AggregateData:
             quad_amps.append(f.quad_amps)
             quad_phases.append(f.quad_phases)
             sig_likes.append(f.signal_likeness)
-        agg_dict['times'] = np.array(times)
-        agg_dict['timestamp'] = np.array(timestamp)
-        agg_dict['seismometer'] = np.array(seismometer)
-        agg_dict['bead_height'] = np.array(bead_height)
-        agg_dict['mean_laser_power'] = np.array(mean_laser_power)
-        agg_dict['laser_power_full'] = np.array(laser_power_full)
-        agg_dict['mean_p_trans'] = np.array(mean_p_trans)
-        agg_dict['p_trans_full'] = np.array(p_trans_full)
-        agg_dict['cant_raw_data'] = np.array(cant_raw_data)
-        agg_dict['quad_raw_data'] = np.array(quad_raw_data)
-        agg_dict['mean_cant_pos'] = np.array(mean_cant_pos)
-        agg_dict['qpd_ffts'] = np.array(qpd_ffts)
-        agg_dict['qpd_ffts_full'] = np.array(qpd_ffts_full)
-        agg_dict['qpd_sb_ffts'] = np.array(qpd_sb_ffts)
-        agg_dict['pspd_ffts'] = np.array(pspd_ffts)
-        agg_dict['pspd_ffts_full'] = np.array(pspd_ffts_full)
-        agg_dict['pspd_sb_ffts'] = np.array(pspd_sb_ffts)
-        agg_dict['template_ffts'] = np.array(template_ffts)
-        agg_dict['template_params'] = np.array(template_params)
-        agg_dict['cant_fft'] = np.array(cant_fft)
-        agg_dict['quad_amps'] = np.array(quad_amps)
-        agg_dict['quad_phases'] = np.array(quad_phases)
-        agg_dict['sig_likes'] = np.array(sig_likes)
+            if lightweight:
+                # delete the object once data has been extracted
+                self.file_data_objs[i] = FileData()
 
-        # # data that is common to all datasets is added only once
-        agg_dict['freqs'] = np.array(self.file_data_objs[0].freqs)
-        agg_dict['fsamp'] = int(self.file_data_objs[0].fsamp)
-        agg_dict['nsamp'] = int(self.file_data_objs[0].nsamp)
-        agg_dict['fund_ind'] = int(self.file_data_objs[0].fund_ind)
-        agg_dict['good_inds'] = np.array(self.file_data_objs[0].good_inds)
-
-        self.agg_dict = agg_dict
-
-        print('Done building dictionary.')
         if lightweight:
             del self.file_data_objs
             self.file_data_objs = []
+
+        # convert lists to numpy arrays
+        times = np.array(times)
+        timestamp = np.array(timestamp)
+        seismometer = np.array(seismometer)
+        bead_height = np.array(bead_height)
+        mean_laser_power = np.array(mean_laser_power)
+        laser_power_full = np.array(laser_power_full)
+        mean_p_trans = np.array(mean_p_trans)
+        p_trans_full = np.array(p_trans_full)
+        cant_raw_data = np.array(cant_raw_data)
+        quad_raw_data = np.array(quad_raw_data)
+        mean_cant_pos = np.array(mean_cant_pos)
+        qpd_ffts = np.array(qpd_ffts)
+        qpd_ffts_full = np.array(qpd_ffts_full)
+        qpd_sb_ffts = np.array(qpd_sb_ffts)
+        pspd_ffts = np.array(pspd_ffts)
+        pspd_ffts_full = np.array(pspd_ffts_full)
+        pspd_sb_ffts = np.array(pspd_sb_ffts)
+        template_ffts = np.array(template_ffts)
+        template_params = np.array(template_params)
+        cant_fft = np.array(cant_fft)
+        quad_amps = np.array(quad_amps)
+        quad_phases = np.array(quad_phases)
+        sig_likes = np.array(sig_likes)
+
+        # add numpy arrays to the dictionary
+        agg_dict['times'] = np.asarray(times)
+        agg_dict['timestamp'] = np.asarray(timestamp)
+        agg_dict['seismometer'] = np.asarray(seismometer)
+        agg_dict['bead_height'] = np.asarray(bead_height)
+        agg_dict['mean_laser_power'] = np.asarray(mean_laser_power)
+        agg_dict['laser_power_full'] = np.asarray(laser_power_full)
+        agg_dict['mean_p_trans'] = np.asarray(mean_p_trans)
+        agg_dict['p_trans_full'] = np.asarray(p_trans_full)
+        agg_dict['cant_raw_data'] = np.asarray(cant_raw_data)
+        agg_dict['quad_raw_data'] = np.asarray(quad_raw_data)
+        agg_dict['mean_cant_pos'] = np.asarray(mean_cant_pos)
+        agg_dict['qpd_ffts'] = np.asarray(qpd_ffts)
+        agg_dict['qpd_ffts_full'] = np.asarray(qpd_ffts_full)
+        agg_dict['qpd_sb_ffts'] = np.asarray(qpd_sb_ffts)
+        agg_dict['pspd_ffts'] = np.asarray(pspd_ffts)
+        agg_dict['pspd_ffts_full'] = np.asarray(pspd_ffts_full)
+        agg_dict['pspd_sb_ffts'] = np.asarray(pspd_sb_ffts)
+        agg_dict['template_ffts'] = np.asarray(template_ffts)
+        agg_dict['template_params'] = np.asarray(template_params)
+        agg_dict['cant_fft'] = np.asarray(cant_fft)
+        agg_dict['quad_amps'] = np.asarray(quad_amps)
+        agg_dict['quad_phases'] = np.asarray(quad_phases)
+        agg_dict['sig_likes'] = np.asarray(sig_likes)
+
+        self.agg_dict = agg_dict
+        print('Done building dictionary.')
 
 
     def __bin_by_config_data(self):
