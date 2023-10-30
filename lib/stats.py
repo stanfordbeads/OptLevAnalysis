@@ -8,35 +8,35 @@ from funcs import *
 # AggregateData objects.
 # ************************************************************************ #
 
-def fit_alpha_all_files(agg_obj,file_indices=None,sensor='qpd',use_sl=False):
+def fit_alpha_all_files(agg_dict,file_indices=None,sensor='qpd',use_sl=False):
     '''
     Find the best fit alpha to a dataset. Most of this should eventually be moved to
     stats.py so that different likelihood functions can be called from here.
     '''
 
     if file_indices is None:
-        file_indices = np.array(range(agg_obj.agg_dict['times'].shape[0]))
+        file_indices = np.array(range(agg_dict['times'].shape[0]))
     
     likelihood_coeffs = []
     for i in file_indices:
-        likelihood_coeffs.append(fit_alpha_for_file(agg_obj,i,sensor,use_sl=use_sl))
+        likelihood_coeffs.append(fit_alpha_for_file(agg_dict,i,sensor,use_sl=use_sl))
 
     return np.array(likelihood_coeffs)
 
 
-def fit_alpha_for_file(agg_obj,file_index,sensor='qpd',use_sl=False):
+def fit_alpha_for_file(agg_dict,file_index,sensor='qpd',use_sl=False):
     '''
     Find the best fit alpha for a single file and return it. This function will be
     called in parallel so that all files can be processed to produce a limit.
     '''
 
-    lambdas = agg_obj.agg_dict['template_params'][file_index]
-    yuk_ffts = agg_obj.agg_dict['template_ffts'][file_index]
-    bead_ffts = agg_obj.agg_dict[sensor+'_ffts'][file_index]
-    bead_sb_ffts = agg_obj.agg_dict[sensor+'_sb_ffts'][file_index]
+    lambdas = agg_dict['template_params'][file_index]
+    yuk_ffts = agg_dict['template_ffts'][file_index]
+    bead_ffts = agg_dict[sensor+'_ffts'][file_index]
+    bead_sb_ffts = agg_dict[sensor+'_sb_ffts'][file_index]
     num_sb = int(bead_sb_ffts.shape[1]/bead_ffts.shape[1])
-    good_inds = agg_obj.agg_dict['good_inds']
-    sig_likes = agg_obj.agg_dict['sig_likes'][file_index][:,good_inds]
+    good_inds = agg_dict['good_inds']
+    sig_likes = agg_dict['sig_likes'][file_index][:,good_inds]
     likelihood_coeffs = np.zeros((len(good_inds),3,len(lambdas),4),dtype=np.float128)
     
     for harm,_ in enumerate(good_inds):

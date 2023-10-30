@@ -6,6 +6,7 @@ from datetime import datetime
 from scipy import signal
 import h5py
 from funcs import *
+from stats import *
 
 
 def polar_plots(agg_dict,indices=None,axis_ind=0,sensor='qpd',\
@@ -549,5 +550,65 @@ def position_drift(agg_dict,descrip=None,t_bin_width=600):
 
     del lp,pt,bh,cx,cz,lp_t,pt_t,bh_t,cx_t,cz_t,times,plot_times,av_times,\
         start_date,hours,delta_t,num_t_bins,colors
+    
+    return fig,ax
+
+
+def mles_vs_time(agg_dict,descrip=None,sensor='qpd',axis_ind=0,t_bin_width=600):
+    '''
+    Plot the MLE for alpha over time for a few harmonics.
+    '''
+
+    if descrip is None:
+        descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
+    
+    times = agg_dict['times']
+    av_times = np.mean(times,axis=1)
+    start_date = datetime.fromtimestamp(av_times[0]*1e-9).strftime('%b %d, %H:%M:%S')
+    hours = (av_times-av_times[0])*1e-9/3600.
+    harm_freqs = agg_dict['freqs'][agg_dict['good_inds']]
+    axes = [' $x$',' $y$',' $z$']
+
+    # index where lambda is 10 um
+    lamb_ind = np.argmin(np.abs(agg_dict['template_params'][0,:]-1e-5))
+
+    # get the best fit alphas
+    likelihood_coeffs = fit_alpha_all_files(agg_dict,sensor=sensor)
+
+    # average by time
+    delta_t = (av_times[1]-av_times[0])*1e-9
+    t_bins = int(round(t_bin_width/delta_t))
+    num_t_bins = int(len(av_times)/t_bins)
+    alpha_hat_t = np.zeros((num_t_bins,likelihood_coeffs.shape[1]))
+    err_alpha_t = np.zeros((num_t_bins,likelihood_coeffs.shape[1]))
+    plot_times = np.zeros(num_t_bins)
+
+    for i in range(num_t_bins):
+        # add parabolic log-likelihoods
+        summed_likelihoods = np.sum(likelihood_coeffs[i*t_bins:(i+1)*t_bins,:,axis_ind,lamb_ind,:],axis=0)
+        # then recompute the minimum with the new coefficients
+        alpha_hat_t[i,:] = -summed_likelihoods[:,1]/(2.*summed_likelihoods[:,0])
+        # one sigma error
+        err_alpha_t[i,:] = 1./np.sqrt(2.*summed_likelihoods[:,0])
+        plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
+
+    colors = plt.get_cmap('rainbow',len(harm_freqs))
+
+    fig,ax = plt.subplots()
+    for i in range(alpha_hat_t.shape[1]):
+        ax.errorbar(plot_times,alpha_hat_t[:,i]/1e8,yerr=2.*err_alpha_t[:,i]/1e8,color=colors(i),ls='none',\
+                    alpha=0.65,ms=3,marker='o',label='{:.0f} Hz'.format(harm_freqs[i]))
+    ax.plot([], [], ' ', label='95\% CL errors',zorder=0)
+    ax.set_title('MLE of $\\alpha(\lambda=10\mathrm{\mu m})$ for '+sensor.upper()+axes[axis_ind]+' over time')
+    ax.set_xlabel('Time since '+start_date+' [hours]')
+    ax.set_xlim([min(plot_times),max(plot_times)])
+    ax.set_ylabel('$\hat{\\alpha} / 10^8$')
+    ax.grid(which='both')
+    handles, labels = ax.get_legend_handles_labels()
+    order = list(range(1,alpha_hat_t.shape[1]+1))+[0]
+    ax.legend([handles[idx] for idx in order],[labels[idx] for idx in order],ncol=4,fontsize=10)
+
+    del times, av_times, start_date, hours, harm_freqs, lamb_ind, likelihood_coeffs,\
+        delta_t, t_bins, num_t_bins, alpha_hat_t, plot_times, colors
     
     return fig,ax
