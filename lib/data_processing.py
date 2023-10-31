@@ -881,7 +881,7 @@ class AggregateData:
         '''
         this_file = FileData(file_path)
         try:
-            this_file.load_data(diagonalize_qpd=diagonalize_qpd,signal_model=signal_model,\
+            this_file.load_data(diagonalize_qpd=diagonalize_qpd,signal_model=signal_model,max_freq=500.,\
                                 p0_bead=p0_bead,harms=harms,no_tf=no_tf,lightweight=lightweight)
         except Exception as e:
             this_file.is_bad = True
@@ -987,29 +987,29 @@ class AggregateData:
         sig_likes = np.array(sig_likes)
 
         # add numpy arrays to the dictionary
-        agg_dict['times'] = np.asarray(times)
-        agg_dict['timestamp'] = np.asarray(timestamp)
-        agg_dict['seismometer'] = np.asarray(seismometer)
-        agg_dict['bead_height'] = np.asarray(bead_height)
-        agg_dict['mean_laser_power'] = np.asarray(mean_laser_power)
-        agg_dict['laser_power_full'] = np.asarray(laser_power_full)
-        agg_dict['mean_p_trans'] = np.asarray(mean_p_trans)
-        agg_dict['p_trans_full'] = np.asarray(p_trans_full)
-        agg_dict['cant_raw_data'] = np.asarray(cant_raw_data)
-        agg_dict['quad_raw_data'] = np.asarray(quad_raw_data)
-        agg_dict['mean_cant_pos'] = np.asarray(mean_cant_pos)
-        agg_dict['qpd_ffts'] = np.asarray(qpd_ffts)
-        agg_dict['qpd_ffts_full'] = np.asarray(qpd_ffts_full)
-        agg_dict['qpd_sb_ffts'] = np.asarray(qpd_sb_ffts)
-        agg_dict['pspd_ffts'] = np.asarray(pspd_ffts)
-        agg_dict['pspd_ffts_full'] = np.asarray(pspd_ffts_full)
-        agg_dict['pspd_sb_ffts'] = np.asarray(pspd_sb_ffts)
-        agg_dict['template_ffts'] = np.asarray(template_ffts)
-        agg_dict['template_params'] = np.asarray(template_params)
-        agg_dict['cant_fft'] = np.asarray(cant_fft)
-        agg_dict['quad_amps'] = np.asarray(quad_amps)
-        agg_dict['quad_phases'] = np.asarray(quad_phases)
-        agg_dict['sig_likes'] = np.asarray(sig_likes)
+        agg_dict['times'] = times
+        agg_dict['timestamp'] = timestamp
+        agg_dict['seismometer'] = seismometer
+        agg_dict['bead_height'] = bead_height
+        agg_dict['mean_laser_power'] = mean_laser_power
+        agg_dict['laser_power_full'] = laser_power_full
+        agg_dict['mean_p_trans'] = mean_p_trans
+        agg_dict['p_trans_full'] = p_trans_full
+        agg_dict['cant_raw_data'] = cant_raw_data
+        agg_dict['quad_raw_data'] = quad_raw_data
+        agg_dict['mean_cant_pos'] = mean_cant_pos
+        agg_dict['qpd_ffts'] = qpd_ffts
+        agg_dict['qpd_ffts_full'] = qpd_ffts_full
+        agg_dict['qpd_sb_ffts'] = qpd_sb_ffts
+        agg_dict['pspd_ffts'] = pspd_ffts
+        agg_dict['pspd_ffts_full'] = pspd_ffts_full
+        agg_dict['pspd_sb_ffts'] = pspd_sb_ffts
+        agg_dict['template_ffts'] = template_ffts
+        agg_dict['template_params'] = template_params
+        agg_dict['cant_fft'] = cant_fft
+        agg_dict['quad_amps'] = quad_amps
+        agg_dict['quad_phases'] = quad_phases
+        agg_dict['sig_likes'] = sig_likes
 
         self.agg_dict = agg_dict
         print('Done building dictionary.')
