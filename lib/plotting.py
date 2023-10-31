@@ -350,6 +350,7 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
     if descrip is None:
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
 
+    axes = ['x','y','z']
     freqs = agg_dict['freqs']
     fsamp = agg_dict['fsamp']
     nsamp = agg_dict['nsamp']
@@ -380,7 +381,7 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
         ax.set_ylabel('Frequency [Hz]')
         ax.set_ylim([0.1,50])
         ax.set_xlabel('Time since '+start_date+' [hours]')
-        ax.set_title('ROI '+sensor.upper()+' spectrogram for '+descrip)
+        ax.set_title('ROI '+sensor.upper()+' $'+axes[axis_ind]+'$ spectrogram for '+descrip)
         cbar = fig.colorbar(pcm)
         cbar.set_label('ASD [N/$\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=15)
     elif which=='full':
@@ -395,7 +396,7 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
         ax.set_ylim([0.1,max(freqs)])
         ax.set_xlabel('Time since '+start_date+' [hours]')
         ax.set_yscale('log')
-        ax.set_title('Full '+sensor.upper()+' spectrogram for '+descrip)
+        ax.set_title('Full '+sensor.upper()+' $'+axes[axis_ind]+'$ spectrogram for '+descrip)
         cbar = fig.colorbar(pcm)
         cbar.set_label('ASD [N/$\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=15)
     elif which=='rayleigh':
@@ -409,7 +410,7 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
         ax.set_ylabel('Frequency [Hz]')
         ax.set_ylim([0.1,50])
         ax.set_xlabel('Time since '+start_date+' [hours]')
-        ax.set_title(sensor.upper()+' Rayleigh spectrogram for '+descrip)
+        ax.set_title(sensor.upper()+' $'+axes[axis_ind]+'$ Rayleigh spectrogram for '+descrip)
         cbar = fig.colorbar(pcm)
         cbar.set_label('Rayleigh statistic [1/$\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=15)
 
@@ -460,16 +461,16 @@ def time_evolution(agg_dict,descrip=None,sensor='qpd',axis_ind=0,\
     # plot the results
     fig,ax = plt.subplots(2,1,figsize=(8,8),sharex=True)
     for i in range(len(good_freqs)):
-        ax[0].semilogy(plot_times,asd_t[:,i],ls='none',marker='o',ms=2,alpha=0.65,\
+        ax[0].semilogy(plot_times,asd_t[:,i],ls='none',marker='o',ms=6,alpha=0.45,\
                     label='{:.1f} Hz'.format(good_freqs[i]),color=colors(i))
-        ax[1].plot(plot_times,phase_t[:,i],ls='none',marker='o',ms=2,alpha=0.65,\
+        ax[1].plot(plot_times,phase_t[:,i],ls='none',marker='o',ms=6,alpha=0.45,\
                 label='{:.1f} Hz'.format(good_freqs[i]),color=colors(i))
     ax[0].set_ylabel('ASD [N/$\sqrt{\mathrm{Hz}}$]')
     if ylim is not None:
         ax[0].set_ylim(ylim)
     ax[0].set_title('Time evolution of '+sensor.upper()+' $'+axes[axis_ind]+'$ for '+descrip)
     ax[0].grid(which='both')
-    ax[0].legend(fontsize=8,ncol=4)
+    ax[0].legend(fontsize=12,ncol=4)
 
     ax[1].set_xlabel('Time since '+start_date+' [hours]')
     ax[1].set_ylabel('Phase [$^\circ$]')
