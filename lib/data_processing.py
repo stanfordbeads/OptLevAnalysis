@@ -102,16 +102,17 @@ class FileData:
         self.get_signal_likeness()
         self.pspd_raw_data = self.data_dict['pspd_data']
         self.nsamp = len(self.times)
-        self.freqs = np.fft.rfftfreq(self.nsamp, d=1.0/self.fsamp)
+        freqs = np.fft.rfftfreq(self.nsamp, d=1.0/self.fsamp)
+        self.freqs = freqs[freqs<=max_freq]
         self.calibrate_stage_position()
         self.qpd_force_calibrated = self.calibrate_bead_response(tf_path=tf_path,sensor='QPD',\
                                                                  cal_drive_freq=cal_drive_freq,\
-                                                                 max_freq=max_freq,no_tf=no_tf)
+                                                                 no_tf=no_tf)
         self.pspd_force_calibrated= self.calibrate_bead_response(tf_path=tf_path,sensor='PSPD',\
                                                                  cal_drive_freq=cal_drive_freq,\
-                                                                 max_freq=max_freq,no_tf=no_tf)
+                                                                 no_tf=no_tf)
         self.pspd_force_calibrated[2,:] = np.copy(self.qpd_force_calibrated[2,:])
-        self.get_boolean_cant_mask(num_harmonics=num_harmonics,harms=harms,width=width,max_freq=max_freq)
+        self.get_boolean_cant_mask(num_harmonics=num_harmonics,harms=harms,width=width)
         self.get_ffts_and_noise(noise_bins=noise_bins)
         if signal_model is not None:
             self.make_templates(signal_model,p0_bead)
@@ -343,7 +344,7 @@ class FileData:
 
 
     def calibrate_bead_response(self,tf_path=None,sensor='QPD',cal_drive_freq=71.0,\
-                                max_freq=2500.,no_tf=False):
+                                no_tf=False):
         '''
         Apply correction using the transfer function to calibrate the
         x, y, and z responses.
@@ -353,7 +354,7 @@ class FileData:
             # for data from 2023 and later, the code will automatically find the transfer
             # function in the right format. For old data, specify the path manually
             if int(self.date) > 20230101:
-                Harr = self.tf_array_fitted(self.freqs,sensor,tf_path=tf_path,max_freq=max_freq)
+                Harr = self.tf_array_fitted(self.freqs,sensor,tf_path=tf_path)
             else:
                 tf_path = '/data/new_trap_processed/calibrations/transfer_funcs/20200320.trans'
                 Harr = self.tf_array_interpolated(self.freqs,tf_path)
@@ -385,7 +386,7 @@ class FileData:
             self.force_cal_factors_pspd = force_cal_factors
 
         # calculate the DFT of the data, then correct using the transfer function matrix
-        data_fft = np.fft.rfft(raw_data)
+        data_fft = np.fft.rfft(raw_data)[:,:len(self.freqs)]
         # matrix multiplication with index contraction made explicit
         # 'kj,ki' = matrix multiplication along second two indices (the 3x3 part)
         # output has one free index (j). '->ji' = output uncontracted indices in this order
@@ -401,7 +402,7 @@ class FileData:
         return bead_force_cal
 
 
-    def tf_array_fitted(self,freqs,sensor,tf_path=None,max_freq=2500.):
+    def tf_array_fitted(self,freqs,sensor,tf_path=None):
         '''
         Get the transfer function array from the hdf5 file containing the fitted poles,
         zeros, and gain from the measured transfer functions along x, y, and z, and returns it.
@@ -422,10 +423,6 @@ class FileData:
             Harr[:,2,2] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zZZ'], tf_file['fits/'+sensor+'/pZZ'], \
                                             tf_file['fits/'+sensor+'/kZZ']/tf_file.attrs['scaleFactors_'+sensor][2], 2*np.pi*freqs)[1]
             tf_file.close()
-
-            # Only apply the TF to frequencies below some frequency
-            max_freq_ind = np.argmin( np.abs(freqs - max_freq) )
-            Harr[max_freq_ind+1:,:,:] = 0.0+0.0j
 
         return Harr
     
@@ -506,18 +503,15 @@ class FileData:
         return Hout
     
 
-    def build_drive_mask(self, cant_fft, freqs, num_harmonics=10, width=0, harms=[], max_freq=2500.):
+    def build_drive_mask(self, cant_fft, freqs, num_harmonics=10, width=0, harms=[]):
         '''
         Identify the fundamental drive frequency and make an array of harmonics specified
         by the function arguments, then make a notch mask of the width specified around these harmonics.
         *** Not clear that the width will ever be used, so it may be removed ***
         '''
 
-        # index of maximum frequency
-        max_ind = np.argmin(np.abs(freqs - max_freq))
-
         # find the drive frequency, ignoring the DC bin
-        fund_ind = int(np.argmax(np.abs(cant_fft[1:max_ind])) + 1)
+        fund_ind = int(np.argmax(np.abs(cant_fft[1:])) + 1)
         drive_freq = freqs[fund_ind]
 
         # mask is  initialized with 1 at the drive frequency and 0 elsewhere
@@ -554,7 +548,7 @@ class FileData:
         return drive_mask, fund_ind
 
 
-    def get_boolean_cant_mask(self, num_harmonics=10, harms=[], width=0, cant_harms=5, max_freq=2500.):
+    def get_boolean_cant_mask(self, num_harmonics=10, harms=[], width=0, cant_harms=5):
         '''
         Build a boolean mask of a given width for the cantilever drive for the specified harnonics
         '''
@@ -566,12 +560,12 @@ class FileData:
         drive_vec = self.cant_pos_calibrated[drive_ind]
 
         # fft of the cantilever position vector
-        cant_fft = np.fft.rfft(drive_vec)
+        cant_fft = np.fft.rfft(drive_vec)[:len(self.freqs)]
 
         # get the notch mask for the given harmonics, as well as the index of the fundamental
         # frequency and the drive frequency
         drive_mask, fund_ind = self.build_drive_mask(cant_fft, self.freqs, num_harmonics=num_harmonics, \
-                                                     harms=harms, width=width, max_freq=max_freq)
+                                                     harms=harms, width=width)
 
         # create array containing the indices of the values that survive the mask
         good_inds = np.arange(len(drive_mask)).astype(int)[drive_mask]
@@ -819,7 +813,7 @@ class AggregateData:
 
 
     def load_file_data(self,num_cores=1,diagonalize_qpd=False,load_templates=False,harms=[],\
-                       no_tf=False,no_config=False,lightweight=True):
+                       max_freq=500.,no_tf=False,no_config=False,lightweight=True):
         '''
         Create a FileData object for each of the files in the file list and load
         in the relevant data for physics analysis.
@@ -835,7 +829,7 @@ class AggregateData:
         print('Loading data from {} files...'.format(len(self.file_list)))
         file_data_objs = Parallel(n_jobs=num_cores)(delayed(self.process_file)\
                                                     (file_path,diagonalize_qpd,signal_models[self.bin_indices[i,0]],\
-                                                     self.p0_bead[self.bin_indices[i,1]],harms,no_tf,lightweight) \
+                                                     self.p0_bead[self.bin_indices[i,1]],harms,max_freq,no_tf,lightweight) \
                                                      for i,file_path in enumerate(tqdm(self.file_list)))
         # record which files are bad in the self.bin_indices array
         for i,file_data_obj in enumerate(file_data_objs):
@@ -874,15 +868,15 @@ class AggregateData:
         self.signal_models = signal_models
         
 
-    def process_file(self,file_path,diagonalize_qpd=False,\
-                     signal_model=None,p0_bead=None,harms=[],no_tf=False,lightweight=True):
+    def process_file(self,file_path,diagonalize_qpd=False,signal_model=None,p0_bead=None,\
+                     harms=[],max_freq=500.,no_tf=False,lightweight=True):
         '''
         Process data for an individual file and return the FileData object
         '''
         this_file = FileData(file_path)
         try:
-            this_file.load_data(diagonalize_qpd=diagonalize_qpd,signal_model=signal_model,max_freq=500.,\
-                                p0_bead=p0_bead,harms=harms,no_tf=no_tf,lightweight=lightweight)
+            this_file.load_data(diagonalize_qpd=diagonalize_qpd,signal_model=signal_model,p0_bead=p0_bead,\
+                                harms=harms,max_freq=max_freq,no_tf=no_tf,lightweight=lightweight)
         except Exception as e:
             this_file.is_bad = True
         return this_file

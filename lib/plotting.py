@@ -7,6 +7,7 @@ from scipy import signal
 import h5py
 from funcs import *
 from stats import *
+np.seterr(all='ignore')
 
 
 def polar_plots(agg_dict,indices=None,axis_ind=0,sensor='qpd',\
@@ -71,6 +72,7 @@ def polar_plots(agg_dict,indices=None,axis_ind=0,sensor='qpd',\
     
     return fig,axs
 
+
 def xy_on_qpd(qpd_diag_mat):
     '''
     Plot the x and y eigenmodes of the sphere overlaid on the QPD to see any
@@ -127,6 +129,7 @@ def xy_on_qpd(qpd_diag_mat):
     ax2.set_aspect('equal')
 
     return fig,axs
+
 
 def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None):
     '''
@@ -313,7 +316,7 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None):
         ax.loglog(freqs,pspd_x_asd,lw=1,alpha=0.65,label='PSPD $x$')
         ax.loglog(freqs,pspd_y_asd,lw=1,alpha=0.65,label='PSPD $y$')
         ax.loglog(freqs,z_asd,lw=1,alpha=0.65,label='$z$')
-        ax.set_xlim([0.1,2500])
+        ax.set_xlim([0.1,max(freqs)])
         ax.set_ylim(ylim)
         ax.set_title('Full calibrated spectra for '+descrip)
     elif which=='rayleigh':
@@ -389,7 +392,7 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
             plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
         pcm = ax.pcolormesh(plot_times,freqs,spec_asd.T,norm=LogNorm(vmin=vmin,vmax=vmax),cmap='magma')
         ax.set_ylabel('Frequency [Hz]')
-        ax.set_ylim([0.1,2500])
+        ax.set_ylim([0.1,max(freqs)])
         ax.set_xlabel('Time since '+start_date+' [hours]')
         ax.set_yscale('log')
         ax.set_title('Full '+sensor.upper()+' spectrogram for '+descrip)
