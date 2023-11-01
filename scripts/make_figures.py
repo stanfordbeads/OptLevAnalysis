@@ -5,7 +5,7 @@ import argparse
 sys.path.insert(0,'../lib/')
 from matplotlib import pyplot as plt
 from matplotlib import style
-style.use('clarke')
+style.use('optlevstyle.mplstyle')
 from data_processing import AggregateData
 import plotting as pl
 from funcs import *
@@ -108,17 +108,30 @@ fig,ax = pl.position_drift(aggdat.agg_dict)
 fig.savefig(fig_path+'position_drift.png')
 plt.close('all')
 
-# plot the measurements at each harmonic
-fig,ax = pl.polar_plots(aggdat.agg_dict,axis_ind=0,sensor='qpd',vmax=len(aggdat.file_list)/50)
+# plot the measurements at each harmonic in polar form
+fig,ax = pl.polar_plots(aggdat.agg_dict,axis_ind=0,sensor='qpd')
 fig.savefig(fig_path+'polar_qpd_x.png')
-fig,ax = pl.polar_plots(aggdat.agg_dict,axis_ind=1,sensor='qpd',vmax=len(aggdat.file_list)/50)
+fig,ax = pl.polar_plots(aggdat.agg_dict,axis_ind=1,sensor='qpd')
 fig.savefig(fig_path+'polar_qpd_y.png')
-fig,ax = pl.polar_plots(aggdat.agg_dict,axis_ind=2,sensor='qpd',vmax=len(aggdat.file_list)/50)
+fig,ax = pl.polar_plots(aggdat.agg_dict,axis_ind=2,sensor='qpd')
 fig.savefig(fig_path+'polar_qpd_z.png')
-fig,ax = pl.polar_plots(aggdat.agg_dict,axis_ind=0,sensor='pspd',vmax=len(aggdat.file_list)/50)
+fig,ax = pl.polar_plots(aggdat.agg_dict,axis_ind=0,sensor='pspd')
 fig.savefig(fig_path+'polar_pspd_x.png')
-fig,ax = pl.polar_plots(aggdat.agg_dict,axis_ind=1,sensor='pspd',vmax=len(aggdat.file_list)/50)
+fig,ax = pl.polar_plots(aggdat.agg_dict,axis_ind=1,sensor='pspd')
 fig.savefig(fig_path+'polar_pspd_y.png')
+plt.close('all')
+
+# plot the measurements at each harmonic in unwrapped form
+fig,ax = pl.polar_plots(aggdat.agg_dict,axis_ind=0,sensor='qpd',unwrap=True)
+fig.savefig(fig_path+'unwrapped_qpd_x.png')
+fig,ax = pl.polar_plots(aggdat.agg_dict,axis_ind=1,sensor='qpd',unwrap=True)
+fig.savefig(fig_path+'unwrapped_qpd_y.png')
+fig,ax = pl.polar_plots(aggdat.agg_dict,axis_ind=2,sensor='qpd',unwrap=True)
+fig.savefig(fig_path+'unwrapped_qpd_z.png')
+fig,ax = pl.polar_plots(aggdat.agg_dict,axis_ind=0,sensor='pspd',unwrap=True)
+fig.savefig(fig_path+'unwrapped_pspd_x.png')
+fig,ax = pl.polar_plots(aggdat.agg_dict,axis_ind=1,sensor='pspd',unwrap=True)
+fig.savefig(fig_path+'unwrapped_pspd_y.png')
 plt.close('all')
 
 # plot the time evolution of the MLE of alpha

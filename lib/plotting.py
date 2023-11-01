@@ -10,65 +10,90 @@ from stats import *
 np.seterr(all='ignore')
 
 
-def polar_plots(agg_dict,indices=None,axis_ind=0,sensor='qpd',\
+def polar_plots(agg_dict,descrip=None,indices=None,unwrap=False,axis_ind=0,sensor='qpd',\
                 amp_bins=np.logspace(-17,-15, 30),phase_bins=np.linspace(-np.pi,np.pi,60),\
-                vmax=50,plot_templates=True,alphas=np.array((1e8,1e9,1e10))):
+                vmax=None,plot_templates=True,alphas=np.array((1e8,1e9,1e10))):
     '''
     Plot 2d polar histograms binning the datasets by the amplitude and phase at a particular
     harmonic along a given axes.
     '''
+    if descrip is None:
+        descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
     if indices is None:
         indices = np.array(range(agg_dict['qpd_ffts'].shape[0]))
+    if vmax is None:
+        vmax = int(len(agg_dict['timestamp'])/40)
     freqs = agg_dict['freqs']
     harms = freqs[agg_dict['good_inds']]
     cmap_polar = plt.get_cmap('inferno') 
-    cmap_polar.set_under(color='white')
-    axes = ['X','Y','Z']
+    cmap_polar.set_under(color='white',alpha=0)
+    axes = ['$x$','$y$','$y$']
+    subplot_kw = {'projection':'polar'}
+    if unwrap:
+        subplot_kw = {}
 
-    fig,axs = plt.subplots(2, 4, figsize=(16,9), subplot_kw={'projection':'polar'})
+    fig,axs = plt.subplots(2, 4, figsize=(16,9), sharex=True, sharey=True, subplot_kw=subplot_kw)
     # loop through harmonics
     for h,ax in zip(range(len(harms)), axs.flatten()[:-1]):
         ffts = agg_dict[sensor+'_ffts'][indices][:,axis_ind,h]
         sens_title = sensor.upper()
-        _,_,_,im = ax.hist2d(np.angle(ffts),np.abs(ffts),bins=(phase_bins,amp_bins),cmap=cmap_polar,vmin=1,vmax=vmax)
+        # reference phase, will be set to alpha>0 if templates are to be plotted
+        zero_phase = 0
         if plot_templates:
             yuk_ffts = agg_dict['template_ffts'][indices][h]
             lambdas = agg_dict['template_params'][indices][h]
             ten_um_ind = np.argmin(np.abs(lambdas-1e-5))
-            ax.plot(np.angle(-1*yuk_ffts[ten_um_ind,axis_ind,h])*np.ones(4),\
-                    [1e-18,1e-17,1e-16, 1e-15], markersize=10, color='xkcd:electric green', ls='dotted', lw=5)
-            ax.plot(np.angle(-1*np.ones(len(alphas))*yuk_ffts[ten_um_ind,axis_ind,h]),\
-                    np.abs(yuk_ffts[ten_um_ind,axis_ind,h])*alphas,\
+            zero_phase = np.angle(yuk_ffts[ten_um_ind,axis_ind,h])
+            # ax.plot(np.pi*np.ones(4),[1e-18,1e-17,1e-16, 1e-15],\
+            #         markersize=10, color='xkcd:electric green', ls='dotted', lw=5)
+            ax.plot(np.pi*np.ones(len(alphas)),np.abs(yuk_ffts[ten_um_ind,axis_ind,h])*alphas,\
                     color='xkcd:electric green',ls='none',marker='d',ms=10)
-            ax.plot(np.angle(yuk_ffts[ten_um_ind,axis_ind,h])*np.ones(4),\
-                    [1e-18,1e-17,1e-16, 1e-15], markersize=10, color='xkcd:neon blue', ls='dotted', lw=5)
-            ax.plot(np.angle(np.ones(len(alphas))*yuk_ffts[ten_um_ind,axis_ind,h]),\
-                    np.abs(yuk_ffts[ten_um_ind,axis_ind,h])*alphas,\
+            # ax.plot(np.zeros(4),[1e-18,1e-17,1e-16, 1e-15],
+            #         markersize=10, color='xkcd:neon blue', ls='dotted', lw=5)
+            ax.plot(np.zeros(len(alphas)),np.abs(yuk_ffts[ten_um_ind,axis_ind,h])*alphas,\
                     color='xkcd:neon blue',ls='none',marker='d',ms=10)
+        phase = np.angle(ffts*np.exp(-1j*zero_phase))
+        _,_,_,im = ax.hist2d(phase,np.abs(ffts),bins=(phase_bins,amp_bins),cmap=cmap_polar,vmin=1,vmax=vmax)
         ax.set_yscale('log')
-        ax.set_yticks([])
-        ax.set_yticklabels([])
-        ax.set_xticks(np.array([0,90,180,270])*np.pi/180.)
-        ax.set_thetalim(0,2*np.pi)
-        ax.set_title('{:.0f} Hz'.format(harms[h]),fontsize=18)
-        ax.grid(False)
+        if unwrap:
+            ax.set_xticks([-np.pi,0,np.pi])
+            ax.set_xticklabels([-1,0,1],fontsize=16)
+            if h/axs.shape[1]>=1:
+                ax.set_xlabel('Phase [$\pi$]',fontsize=18)
+            if h%axs.shape[1]==0:
+                ax.set_ylabel('Force [N]',fontsize=18)
+                ax.yaxis.set_tick_params(labelsize=16)
+            ax.grid(which='both')
+        else:
+            ax.set_xticks(np.array([0,45,90,135,180,225,270,315])*np.pi/180.)
+            ax.set_thetalim(0,2*np.pi)
+            ax.set_thetagrids(ax.get_xticks()*180./np.pi)
+            ax.grid(which='both',axis='y')
+            ax.set_rlim([min(amp_bins),max(amp_bins)])
+            ax.set_yticks([])
+            ax.set_yticklabels([])
+        ax.set_title('{:.0f} Hz'.format(harms[h]),fontsize=20)
     axs.flatten()[-1].axis('off')
 
     y_range_str = '({:.0e},{:.0e})'.format(axs.flatten()[0].get_ylim()[0],axs.flatten()[0].get_ylim()[1])
     alpha_min = str(int(np.log10(min(alphas))))
     alpha_max = str(int(np.log10(max(alphas))))
-    textStr = '{} radial bins log-spaced in '.format(len(amp_bins))+y_range_str+' N.\n Radial scale is log.\n'
-    textStr += '{} azimuthan bins, linearly spaced.\n'.format(len(phase_bins))
-    textStr += 'Diamonds are for $\\alpha$ ranging \n from $10^{'+alpha_min+'}$ to $10^{'+alpha_max+'}$.\n'
-    textStr += 'Blue dashed line is for $\\alpha >0$.\n'
-    textStr += 'Green dashed line is for $\\alpha <0$.\n'
-    #textStr += f"Faint dashed circles denote mean $\pm 1\sigma$ noise."
+    textStr = '{} force bins log-spaced in '.format(len(amp_bins))+y_range_str+' N.\n Force scale is log.\n'
+    textStr += '{} phase bins, linearly spaced.\n'.format(len(phase_bins))
+    if plot_templates:
+        textStr += 'Diamonds are for $\\alpha$ ranging \n from $10^{'+alpha_min+'}$ to $10^{'+alpha_max+'}$.\n'
+        textStr += 'Blue diamonds mean $\\alpha >0$.\n'
+        textStr += 'Green diamonds mean $\\alpha <0$.\n'
+        textStr += 'Phase is relative to $\\alpha >0$.\n'
     axs.flatten()[-1].text(-0.2,0., textStr, transform = axs.flatten()[-1].transAxes)
-    fig.colorbar(im, ax=axs.flatten()[-1], orientation='horizontal', fraction=0.1)
-    fig.suptitle(sens_title+' measurements for the '+axes[axis_ind]+' axis', fontsize=32)
+    cbar = fig.colorbar(im, ax=axs.flatten()[-1], orientation='horizontal', fraction=0.1)
+    cbar.ax.set_xlabel('Number of 10s datasets',fontsize=18)
+    fig.suptitle(sens_title+' measurements for the '+axes[axis_ind]+' axis for '+descrip, fontsize=32)
 
     # for some reason memory is not released and in subsequent function calls this can cause errors
-    del freqs,harms,ffts,lambdas,yuk_ffts
+    del freqs,harms,ffts
+    if plot_templates:
+        del lambdas, yuk_ffts
     
     return fig,axs
 
@@ -103,8 +128,8 @@ def xy_on_qpd(qpd_diag_mat):
     ax1.set_ylim([-2,2])
     ax1.set_yticks([-2,-1,0,1,2])
     ax1.add_patch(plt.Polygon(Q_trans_xy.T,ls='-',lw=0.5,edgecolor='black',facecolor='lightgray'))
-    ax1.axvline(0,color=colors[0],label='Bead eigenmodes')
-    ax1.axhline(0,color=colors[0])
+    ax1.axhline(0,color=colors[0],label='Bead $x$ mode')
+    ax1.axvline(0,color=colors[2],label='Bead $y$ mode')
     ax1.plot(np.array([-Q_hor_xy[0],0,Q_hor_xy[0]]),np.array([-Q_hor_xy[1],0,Q_hor_xy[1]]),color=colors[1],label='QPD axes')
     ax1.plot(np.array([-Q_ver_xy[0],0,Q_ver_xy[0]]),np.array([-Q_ver_xy[1],0,Q_ver_xy[1]]),color=colors[1])
     ax1.set_title('Bead eigenspace')
@@ -119,8 +144,8 @@ def xy_on_qpd(qpd_diag_mat):
     ax2.set_yticks([-2,-1,0,1,2])
     ax2.add_patch(plt.Polygon(np.array(((-1,-1,1,1),(-1,1,1,-1))).T,ls='-',lw=0.5,edgecolor='black',facecolor='lightgray'))
     ax2.set_title('Physical space')
-    ax2.plot([-x_mode_phys[0],0,x_mode_phys[0]],[-x_mode_phys[1],0,x_mode_phys[1]],color=colors[0],label='Bead eigenmodes')
-    ax2.plot([-y_mode_phys[0],0,y_mode_phys[0]],[-y_mode_phys[1],0,y_mode_phys[1]],color=colors[0])
+    ax2.plot([-x_mode_phys[0],0,x_mode_phys[0]],[-x_mode_phys[1],0,x_mode_phys[1]],color=colors[0],label='Bead $x$ mode')
+    ax2.plot([-y_mode_phys[0],0,y_mode_phys[0]],[-y_mode_phys[1],0,y_mode_phys[1]],color=colors[2],label='Bead $y$ mode')
     ax2.axvline(0,color=colors[1],label='QPD axes')
     ax2.axhline(0,color=colors[1])
     ax2.set_xlabel('QPD horizontal axis')
