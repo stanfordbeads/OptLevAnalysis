@@ -85,7 +85,7 @@ class FileData:
 
 
     def load_data(self,tf_path=None,cal_drive_freq=71.0,max_freq=2500.,num_harmonics=10,\
-                  harms=[],width=0,noise_bins=10,diagonalize_qpd=False,\
+                  harms=[],width=0,noise_bins=10,diagonalize_qpd=False,cant_drive_freq=3.0,\
                   signal_model=None,p0_bead=None,lightweight=False,no_tf=False):
         '''
         Applies calibrations to the cantilever data and QPD data, then gets FFTs for both.
@@ -112,7 +112,8 @@ class FileData:
                                                                  cal_drive_freq=cal_drive_freq,\
                                                                  no_tf=no_tf)
         self.pspd_force_calibrated[2,:] = np.copy(self.qpd_force_calibrated[2,:])
-        self.get_boolean_cant_mask(num_harmonics=num_harmonics,harms=harms,width=width)
+        self.get_boolean_cant_mask(num_harmonics=num_harmonics,harms=harms,\
+                                   cant_drive_freq=cant_drive_freq,width=width)
         self.get_ffts_and_noise(noise_bins=noise_bins)
         if signal_model is not None:
             self.make_templates(signal_model,p0_bead)
@@ -503,7 +504,7 @@ class FileData:
         return Hout
     
 
-    def build_drive_mask(self, cant_fft, freqs, num_harmonics=10, width=0, harms=[]):
+    def build_drive_mask(self, cant_fft, freqs, num_harmonics=10, width=0, harms=[], cant_drive_freq=3.0):
         '''
         Identify the fundamental drive frequency and make an array of harmonics specified
         by the function arguments, then make a notch mask of the width specified around these harmonics.
@@ -511,7 +512,7 @@ class FileData:
         '''
 
         # find the drive frequency, ignoring the DC bin
-        fund_ind = int(np.argmax(np.abs(cant_fft[1:])) + 1)
+        fund_ind = np.argmin(np.abs(self.freqs-cant_drive_freq))
         drive_freq = freqs[fund_ind]
 
         # mask is  initialized with 1 at the drive frequency and 0 elsewhere
@@ -548,7 +549,7 @@ class FileData:
         return drive_mask, fund_ind
 
 
-    def get_boolean_cant_mask(self, num_harmonics=10, harms=[], width=0, cant_harms=5):
+    def get_boolean_cant_mask(self, num_harmonics=10, harms=[], width=0, cant_harms=5, cant_drive_freq=3.0):
         '''
         Build a boolean mask of a given width for the cantilever drive for the specified harnonics
         '''
@@ -565,7 +566,7 @@ class FileData:
         # get the notch mask for the given harmonics, as well as the index of the fundamental
         # frequency and the drive frequency
         drive_mask, fund_ind = self.build_drive_mask(cant_fft, self.freqs, num_harmonics=num_harmonics, \
-                                                     harms=harms, width=width)
+                                                     harms=harms, width=width, cant_drive_freq=cant_drive_freq)
 
         # create array containing the indices of the values that survive the mask
         good_inds = np.arange(len(drive_mask)).astype(int)[drive_mask]
