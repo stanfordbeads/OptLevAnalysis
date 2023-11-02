@@ -732,7 +732,7 @@ class FileData:
 
 class AggregateData:
 
-    def __init__(self,data_dirs=[],file_prefixes=[],descrips=[],num_to_load=1e6):
+    def __init__(self,data_dirs=[],file_prefixes=[],descrips=[],num_to_load=1e6,first_index=0):
         '''
         Takes a list of directories containing the files to be aggregated, and optionally
         a list of file prefixes. If given, the list of file prefixes should be the same length as
@@ -777,6 +777,7 @@ class AggregateData:
         self.pspd_asds = np.array(())
         self.signal_models = []
         self.lightweight = True
+        self.first_index = first_index
 
 
     def __get_file_list(self,no_config=False):
@@ -806,6 +807,7 @@ class AggregateData:
             files = [str(dir)+'/'+f for f in files if (os.path.isfile(str(dir)+'/'+f) and \
                                                   (self.file_prefixes[i] in f and f.endswith('.h5')))]
             files.sort(key=get_file_number)
+            files = files[self.first_index:]
             num_to_load = min(self.num_to_load[i],len(files))
             file_list += files[:num_to_load]
             # keep track of the number of files loaded for each directory
@@ -1577,8 +1579,9 @@ class AggregateData:
                 self.qpd_asds = np.concatenate((object1.qpd_asds,object2.qpd_asds),axis=0)
             # merge the agg_dicts
             agg_dict = {}
+            keys_to_skip = ['freqs','good_inds']
             for k in object1.agg_dict.keys():
-                if len(np.shape(object1.agg_dict[k]))>0:
+                if (len(np.shape(object1.agg_dict[k]))>0) and (k not in keys_to_skip):
                     # concatentate the arrays
                     agg_dict[k] = np.concatenate((object1.agg_dict[k],object2.agg_dict[k]))
                 else:
@@ -1592,15 +1595,19 @@ class AggregateData:
               +'bias must be redone after merging.')
 
 
-    def save_to_hdf5(self,path):
+    def save_to_hdf5(self,path=''):
         '''
         Save the data in the AggregateData object to an hdf5 file.
         '''
         print('Saving AggregateData object...')
 
-        # if only a filename is given, append the default base path
-        if len(path.split('/'))==1:
-            path = '/data/new_trap_processed/aggdat/' + path
+        # if no path is given, construct the default from the filename
+        if path=='':
+            path = '/data/new_trap_processed/aggdat/'+'/'.join(self.file_list[0].split('/')[3:-1]) + 'aggdat.h5'
+
+        # make the folders if they don't already exist
+        if not os.path.exists('/'.join(path.split('/')[:-1])):
+            os.makedirs('/'.join(path.split('/')[:-1]))
 
         if len(self.file_data_objs):
             print('Warning: FileData objects cannot be saved to hdf5. Only saving AggregateData attributes.')
@@ -1639,10 +1646,7 @@ class AggregateData:
         '''
         print('Loading AggregateData object...')
 
-        # if only a filename is given, append the default base path
-        if len(path.split('/'))==1:
-            path = '/data/new_trap_processed/aggdat/' + path
-
+        # add the current hash to the file attributes
         this_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('ascii').strip()
 
         with h5py.File(path, 'r') as f:
