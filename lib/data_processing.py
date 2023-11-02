@@ -1600,7 +1600,7 @@ class AggregateData:
 
         # if only a filename is given, append the default base path
         if len(path.split('/'))==1:
-            path = '/data/new_trap_processed/processed_files/clarke_temp/' + path
+            path = '/data/new_trap_processed/aggdat/' + path
 
         if len(self.file_data_objs):
             print('Warning: FileData objects cannot be saved to hdf5. Only saving AggregateData attributes.')
@@ -1641,7 +1641,7 @@ class AggregateData:
 
         # if only a filename is given, append the default base path
         if len(path.split('/'))==1:
-            path = '/data/new_trap_processed/processed_files/clarke_temp/' + path
+            path = '/data/new_trap_processed/aggdat/' + path
 
         this_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('ascii').strip()
 
