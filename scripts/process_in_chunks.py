@@ -13,7 +13,7 @@ parser.add_argument('-num_cores',type=int,default=20)
 parser.add_argument('-no_templates',action='store_true',default=False)
 parser.add_argument('-descrip',type=str,default='')
 parser.add_argument('-num_to_load',type=int,default=1000000)
-parser.add_argument('-chunk_size',type=int,default=1000)
+parser.add_argument('-chunk_size',type=int,default=100)
 args = parser.parse_args()
 path = args.path
 prefix = args.prefix
@@ -59,7 +59,6 @@ indices,first_index = get_loaded_indices(aggdat)
 # loop through and load data until all raw files have been processed
 while(len(indices)<min(num_raw_files,num_to_load)):
     print('Loading starting from file '+str(first_index))
-    time.sleep(5)
 
     # data not yet loaded
     aggdat_temp = AggregateData([path],[prefix],[descrip],num_to_load=chunk_size,first_index=first_index)

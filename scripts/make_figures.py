@@ -36,6 +36,8 @@ file_path = aggdat.file_list[0]
 tf_path = file_path.split('new_trap')[0]+'new_trap_processed/calibrations/transfer_funcs'\
           +file_path.split('new_trap')[1].split('Bead')[0]+'TF.h5'
 
+print('Making the standard plots...')
+
 # plot transfer functions
 fig,ax = pl.transfer_funcs(tf_path,sensor='QPD')
 fig.savefig(fig_path+'tf_amp_qpd.png')

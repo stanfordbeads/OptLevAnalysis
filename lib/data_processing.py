@@ -1429,10 +1429,10 @@ class AggregateData:
         # get the ffts and phase shift them relative to quadrant 1
         fft_qpd_1_all = np.fft.rfft(raw_qpd_1)
         phase_qpd_1 = np.angle(fft_qpd_1_all)
-        fft_qpd_1 = np.mean(fft_qpd_1_all*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['nsamp'],axis=0)
-        fft_qpd_2 = np.mean(np.fft.rfft(raw_qpd_2)*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['nsamp'],axis=0)
-        fft_qpd_3 = np.mean(np.fft.rfft(raw_qpd_3)*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['nsamp'],axis=0)
-        fft_qpd_4 = np.mean(np.fft.rfft(raw_qpd_4)*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['nsamp'],axis=0)
+        fft_qpd_1 = np.mean(fft_qpd_1_all*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['nsamp'],axis=0)[:len(freqs)]
+        fft_qpd_2 = np.mean(np.fft.rfft(raw_qpd_2)*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['nsamp'],axis=0)[:len(freqs)]
+        fft_qpd_3 = np.mean(np.fft.rfft(raw_qpd_3)*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['nsamp'],axis=0)[:len(freqs)]
+        fft_qpd_4 = np.mean(np.fft.rfft(raw_qpd_4)*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['nsamp'],axis=0)[:len(freqs)]
 
         if plot:
             fig,ax = plt.subplots(2,1,sharex=True)
