@@ -15,7 +15,7 @@ pip uninstall optlevanalysis
 ## Usage
 An example notebook that demonstrates how to use the `FileData` and `AggregateData` classes can be found [here](notebooks/example.ipynb).
 
-To run out-of-the-box, se the [`process_dataset`](scripts/process_dataset.py) script. The only required arguments are the path to a folder containing the raw data (including both the `.h5` files and a `config.yaml` file) and a file prefix:
+To run out-of-the-box, use the [`process_dataset`](scripts/process_dataset.py) script. The only required arguments are the path to a folder containing the raw data (including both the `.h5` files and a `config.yaml` file) and a file prefix:
 ```
 cd scripts
 python process_dataset.py /path/to/data/ file_prefix
