@@ -27,7 +27,7 @@ def polar_plots(agg_dict,descrip=None,indices=None,unwrap=False,axis_ind=0,senso
     harms = freqs[agg_dict['good_inds']]
     cmap_polar = plt.get_cmap('inferno') 
     cmap_polar.set_under(color='white',alpha=0)
-    axes = ['$x$','$y$','$y$']
+    axes = ['$x$','$y$','$z$']
     subplot_kw = {'projection':'polar'}
     if unwrap:
         subplot_kw = {}

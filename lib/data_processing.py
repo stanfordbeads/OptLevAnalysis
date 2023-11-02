@@ -80,6 +80,7 @@ class FileData:
         self.force_cal_factors_qpd = np.array([0,0,0])
         self.force_cal_factors_pspd = np.array([0,0,0])
         self.is_bad = False
+        self.error_log = ''
         self.qpd_diag_mat = np.array(((1.,1.,-1.,-1.),\
                                       (1.,-1.,1.,-1.)))
 
@@ -739,13 +740,15 @@ class AggregateData:
         directory, add the directory to the list multiple times with the corresponding prefixes
         in the file_prefixes argument.
         '''
-        self.data_dirs = np.array(data_dirs)
-        if len(file_prefixes):
+        if isinstance(data_dirs,str):
+            data_dirs = np.array([data_dirs])
+        self.data_dirs = data_dirs
+        if not isinstance(file_prefixes,str):
             if len(file_prefixes) != len(data_dirs):
                 raise Exception('Error: length of data_dirs and file_prefixes do not match.')
         else:
             file_prefixes = ['']*len(data_dirs)
-        if len(descrips):
+        if not isinstance(descrips,str):
             if len(descrips) != len(data_dirs):
                 raise Exception('Error: length of data_dirs and descrips do not match.')
         else:
@@ -769,6 +772,7 @@ class AggregateData:
         self.cant_bins_x = np.array((0,))
         self.cant_bins_z = np.array((0,))
         self.bad_files = np.array([])
+        self.error_logs = np.array([])
         self.qpd_asds = np.array(())
         self.pspd_asds = np.array(())
         self.signal_models = []
@@ -832,11 +836,17 @@ class AggregateData:
                                                     (file_path,diagonalize_qpd,signal_models[self.bin_indices[i,0]],\
                                                      self.p0_bead[self.bin_indices[i,1]],harms,max_freq,no_tf,lightweight) \
                                                      for i,file_path in enumerate(tqdm(self.file_list)))
-        # record which files are bad in the self.bin_indices array
+        # record which files are bad and save the error logs
+        error_logs = []
+        bad_files = []
         for i,file_data_obj in enumerate(file_data_objs):
             if file_data_obj.is_bad == True:
                 self.bin_indices[i,-1] = 1
+                bad_files.append(file_data_obj.file_name)
+                error_logs.append(file_data_obj.error_log)
         self.file_data_objs = file_data_objs
+        self.bad_files = np.array(bad_files)
+        self.error_logs = np.array(error_logs)
         # delete the reference to the data or else the data will all be kept in memory
         # later after being copied to the dictionary as numpy arrays. this is
         # necessary to avoid memory errors when loading large AggregateData objects
@@ -880,6 +890,7 @@ class AggregateData:
                                 harms=harms,max_freq=max_freq,no_tf=no_tf,lightweight=lightweight)
         except Exception as e:
             this_file.is_bad = True
+            this_file.error_log = repr(e)
         return this_file
     
 
@@ -1083,7 +1094,6 @@ class AggregateData:
         and other relevant object attributes.
         '''
         bad_file_indices = np.copy(self.bin_indices[:,-1]).astype(bool)
-        self.bad_files = np.array(self.file_list)[bad_file_indices]
         self.file_list = np.delete(self.file_list,bad_file_indices,axis=0)
         self.file_data_objs = list(np.delete(self.file_data_objs,bad_file_indices,axis=0))
         self.bin_indices = np.delete(self.bin_indices,bad_file_indices,axis=0)
@@ -1547,6 +1557,8 @@ class AggregateData:
             self.file_list = np.array(list(object1.file_list) + list(object2.file_list))
             self.p0_bead = np.array(list(object1.p0_bead) + list(object2.p0_bead))
             self.diam_bead = np.array(list(object1.diam_bead) + list(object2.diam_bead))
+            self.bad_files = np.array(list(object1.bad_files) + list(object2.bad_files))
+            self.error_logs = np.array(list(object1.error_logs) + list(object2.error_logs))
             self.file_data_objs = object1.file_data_objs + object2.file_data_objs
             # ensure that the indices in the second object are offset by the length
             # of the relevant columns in the first object. The remaining indices will be
@@ -1653,6 +1665,8 @@ class AggregateData:
             self.file_prefixes = np.array(f['run_params/file_prefixes'],dtype=np.str_)
             self.descrips = np.array(f['run_params/descrips'],dtype=np.str_)
             self.file_list = np.array(f['run_params/file_list'],dtype=np.str_)
+            self.bad_files = np.array(f['run_params/bad_files'],dtype=np.str_)
+            self.error_logs = np.array(f['run_params/error_logs'],dtype=np.str_)
             self.p0_bead = np.array(f['run_params/p0_bead'])
             self.diam_bead = np.array(f['run_params/diam_bead'])
             self.num_to_load = np.array(f['run_params/num_to_load'])
@@ -1660,7 +1674,6 @@ class AggregateData:
             self.bin_indices = np.array(f['run_params/bin_indices'])
             self.cant_bins_x = np.array(f['run_params/cant_bins_x'])
             self.cant_bins_z = np.array(f['run_params/cant_bins_z'])
-            self.bad_files = np.array(f['run_params/bad_files'])
             self.qpd_asds = np.array(f['run_params/qpd_asds'])
             self.pspd_asds = np.array(f['run_params/pspd_asds'])
 
@@ -1680,3 +1693,13 @@ class AggregateData:
         print('---------------------')
         for attr_name, attr_value in vars(self).items():
             print(attr_name,':    ',type(attr_value))
+
+    
+    def _print_errors(self):
+        '''
+        Debugging tool to print error logs for any files that could not be loaded.
+        '''
+        for fil,err in zip(self.bad_files,self.error_logs):
+            print(fil)
+            print(err)
+            print()
