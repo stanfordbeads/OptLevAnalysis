@@ -12,6 +12,10 @@ To uninstall, run:
 ```
 pip uninstall optlevanalysis
 ```
+If you do not plan to make regular changes to the code and only want to use the latest stable release, run the following from the `OptLevAnalysis` directory:
+```
+bash update.sh
+```
 ## Usage
 An example notebook that demonstrates how to use the `FileData` and `AggregateData` classes can be found [here](notebooks/example.ipynb).
 
