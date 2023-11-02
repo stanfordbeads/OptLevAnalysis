@@ -1,5 +1,4 @@
 import sys
-sys.path.insert(0,'../lib/')
 from data_processing import AggregateData
 import argparse
 

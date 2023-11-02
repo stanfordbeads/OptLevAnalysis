@@ -2,7 +2,6 @@ import sys
 import os
 import time
 import argparse
-sys.path.insert(0,'../lib/')
 from matplotlib import pyplot as plt
 from matplotlib import style
 style.use('optlevstyle.mplstyle')

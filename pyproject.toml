@@ -1,0 +1,14 @@
+[project]
+name = "optlevanalysis"
+description = "Analysis code for the Stanford optical levitation lab."
+dynamic = ["version"]
+
+[build-system]
+requires = ["setuptools >= 61.0.0","setuptools-git-versioning"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["lib"]
+
+[tool.setuptools-git-versioning]
+enabled = true
