@@ -741,8 +741,8 @@ class AggregateData:
         in the file_prefixes argument.
         '''
         if isinstance(data_dirs,str):
-            data_dirs = np.array([data_dirs])
-        self.data_dirs = data_dirs
+            data_dirs = [data_dirs]
+        self.data_dirs = np.array(data_dirs)
         if not isinstance(file_prefixes,str):
             if len(file_prefixes) != len(data_dirs):
                 raise Exception('Error: length of data_dirs and file_prefixes do not match.')
