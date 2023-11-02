@@ -12,7 +12,6 @@ To uninstall, run:
 ```
 pip uninstall optlevanalysis
 ```
-
 ## Usage
 An example notebook that demonstrates how to use the `FileData` and `AggregateData` classes can be found [here](notebooks/example.ipynb).
 
