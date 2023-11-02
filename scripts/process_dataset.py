@@ -19,10 +19,8 @@ load_templates = ~args.no_templates
 output_file = args.output_file
 descrip = args.descrip
 num_to_load = args.num_to_load
-if output_file == '':
-    output_file = ''.join(path.split('/')[-5:])+'.h5'
 if descrip=='':
-    descrip = output_file[:-3]
+    descrip = ''.join(path.split('/data/new_trap/')[-1].split('/'))
 
 # create and save AggregateData object
 aggdat = AggregateData([path],[prefix],[descrip],num_to_load=num_to_load)

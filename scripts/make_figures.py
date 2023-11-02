@@ -17,7 +17,8 @@ args = parser.parse_args()
 agg_path = args.agg_path
 
 # create folder to save the figures in
-fig_path = '/data/new_trap_processed/processed_files/figures/' + agg_path.split('/')[-1][:-3] + '/'
+fig_path = '/'.join(agg_path.split('/')[:-1]) + '/figures/'
+
 if not os.path.exists(fig_path):
     os.mkdir(fig_path)
 else:
