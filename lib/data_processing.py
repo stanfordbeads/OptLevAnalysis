@@ -1617,7 +1617,7 @@ class AggregateData:
             short_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('ascii').strip()
             f.attrs['git_revision_short_hash'] = short_hash
             f.attrs['creation_timestamp'] = time.time()
-            f.attrs['creation_user'] = os.environ.get('USER')
+            f.attrs['creation_user'] = str(os.environ.get('USER'))
             # everything other than agg_dict goes in run_params
             f.create_group('run_params')
             for attr_name, attr_value in vars(self).items():
