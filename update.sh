@@ -1,4 +1,4 @@
-#/bin/bash
+#!/bin/bash
 
 CURRENT_TAG=$(git describe --exact-match HEAD 2>&1)
 NEWEST_TAG=$(git describe --tags $(git rev-list --tags --max-count=1))
