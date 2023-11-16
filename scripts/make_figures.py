@@ -93,6 +93,14 @@ fig.savefig(fig_path+'spectrogram_qpd_z_full.png')
 fig,ax = pl.spectrogram(aggdat.agg_dict,sensor='qpd',axis_ind=2,which='rayleigh')
 fig.savefig(fig_path+'spectrogram_qpd_z_rayleigh.png')
 plt.close('all')
+# for the accelerometer
+fig,ax = pl.spectrogram(aggdat.agg_dict,sensor='accel',which='roi')
+fig.savefig(fig_path+'spectrogram_accel_roi.png')
+fig,ax = pl.spectrogram(aggdat.agg_dict,sensor='accel',which='full')
+fig.savefig(fig_path+'spectrogram_accel_full.png')
+fig,ax = pl.spectrogram(aggdat.agg_dict,sensor='accel',which='rayleigh')
+fig.savefig(fig_path+'spectrogram_accel_rayleigh.png')
+plt.close('all')
 
 # plot time evolution of measurements
 fig,ax = pl.time_evolution(aggdat.agg_dict,sensor='qpd',axis_ind=0)
