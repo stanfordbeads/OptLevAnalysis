@@ -403,7 +403,18 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
     fsamp = agg_dict['fsamp']
     nsamp = agg_dict['nsamp']
     fft_to_asd = np.sqrt(nsamp/2./fsamp)
-    asds = np.abs(agg_dict[sensor+'_ffts_full'][:,axis_ind,:])*fft_to_asd
+    sensor_title = sensor.upper()
+    if sensor=='accel':
+        # convert accelerometer data to m/s^2 using 1000 V/g calibration factor
+        ffts = np.fft.rfft(agg_dict['accelerometer']*9.8/1000.,axis=1)[:,:len(freqs)]*2./nsamp
+        asds = np.abs(ffts*fft_to_asd)
+        axis_ind = 2
+        sensor_title = 'Accelerometer'
+        if ((vmin is None) or (vmax is None)) and which!='rayleigh':
+            vmin = 1e-6
+            vmax = 1e-2
+    else:
+        asds = np.abs(agg_dict[sensor+'_ffts_full'][:,axis_ind,:])*fft_to_asd
 
     times = agg_dict['times']
     av_times = np.mean(times,axis=1)
@@ -429,7 +440,7 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
         ax.set_ylabel('Frequency [Hz]')
         ax.set_ylim([0.1,50])
         ax.set_xlabel('Time since '+start_date+' [hours]')
-        ax.set_title('ROI '+sensor.upper()+' $'+axes[axis_ind]+'$ spectrogram for '+descrip)
+        ax.set_title(sensor_title+' $'+axes[axis_ind]+'$ ROI spectrogram for '+descrip)
         cbar = fig.colorbar(pcm)
         cbar.set_label('ASD [N/$\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
     elif which=='full':
@@ -444,7 +455,7 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
         ax.set_ylim([0.1,max(freqs)])
         ax.set_xlabel('Time since '+start_date+' [hours]')
         ax.set_yscale('log')
-        ax.set_title('Full '+sensor.upper()+' $'+axes[axis_ind]+'$ spectrogram for '+descrip)
+        ax.set_title(sensor_title+' $'+axes[axis_ind]+'$ full spectrogram for '+descrip)
         cbar = fig.colorbar(pcm)
         cbar.set_label('ASD [N/$\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
     elif which=='rayleigh':
@@ -458,7 +469,7 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
         ax.set_ylabel('Frequency [Hz]')
         ax.set_ylim([0.1,50])
         ax.set_xlabel('Time since '+start_date+' [hours]')
-        ax.set_title(sensor.upper()+' $'+axes[axis_ind]+'$ Rayleigh spectrogram for '+descrip)
+        ax.set_title(sensor_title+' $'+axes[axis_ind]+'$ Rayleigh spectrogram for '+descrip)
         cbar = fig.colorbar(pcm)
         cbar.set_label('Rayleigh statistic [1/$\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
 
