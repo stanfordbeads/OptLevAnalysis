@@ -58,6 +58,7 @@ def polar_plots(agg_dict,descrip=None,indices=None,unwrap=False,axis_ind=0,senso
         if unwrap:
             ax.set_xticks([-np.pi,0,np.pi])
             ax.set_xticklabels([-1,0,1],fontsize=16)
+            ax.set_ylim([min(amp_bins),max(amp_bins)])
             if h/axs.shape[1]>=1:
                 ax.set_xlabel('Phase [$\pi$]',fontsize=18)
             if h%axs.shape[1]==0:
@@ -72,7 +73,7 @@ def polar_plots(agg_dict,descrip=None,indices=None,unwrap=False,axis_ind=0,senso
             ax.set_rlim([min(amp_bins),max(amp_bins)])
             ax.set_yticks([])
             ax.set_yticklabels([])
-        ax.set_title('{:.0f} Hz'.format(harms[h]),fontsize=20)
+        ax.set_title('{:.0f} labelpad=16'.format(harms[h]),fontsize=20)
     axs.flatten()[-1].axis('off')
 
     y_range_str = '({:.0e},{:.0e})'.format(axs.flatten()[0].get_ylim()[0],axs.flatten()[0].get_ylim()[1])
@@ -293,7 +294,7 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000):
     return fig,ax
 
 
-def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None):
+def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False):
     '''
     Plof of the QPD and PSPD spectra for a given dataset.
     '''
@@ -310,14 +311,19 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None):
     pspd_x_asds = np.abs(agg_dict['pspd_ffts_full'][:,0,:]*fft_to_asd)
     pspd_y_asds = np.abs(agg_dict['pspd_ffts_full'][:,1,:]*fft_to_asd)
     z_asds = np.abs(agg_dict['qpd_ffts_full'][:,2,:]*fft_to_asd)
+    # convert accelerometer data to m/s^2 using 1000 V/g calibration factor
+    accel_ffts = np.fft.rfft(agg_dict['accelerometer']*9.8/1000.,axis=1)[:,:len(freqs)]*2./nsamp
+    accel_asds = np.abs(accel_ffts*fft_to_asd)
 
     qpd_x_asd = np.sqrt(np.mean(qpd_x_asds**2,axis=0))
     qpd_y_asd = np.sqrt(np.mean(qpd_y_asds**2,axis=0))
     pspd_x_asd = np.sqrt(np.mean(pspd_x_asds**2,axis=0))
     pspd_y_asd = np.sqrt(np.mean(pspd_y_asds**2,axis=0))
     z_asd = np.sqrt(np.mean(z_asds**2,axis=0))
+    accel_asd = np.sqrt(np.mean(accel_asds**2,axis=0))
 
     fig,ax = plt.subplots()
+    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     if len(harms):
         [ax.axvline(3*(i+1),ls='--',lw=1.5,alpha=0.5,color='black') for i in harms]
     ax.set_ylabel('ASD [N/$\sqrt{\mathrm{Hz}}$]')
@@ -330,6 +336,10 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None):
         ax.semilogy(freqs,pspd_x_asd,lw=1,alpha=0.65,label='PSPD $x$')
         ax.semilogy(freqs,pspd_y_asd,lw=1,alpha=0.65,label='PSPD $y$')
         ax.semilogy(freqs,z_asd,lw=1,alpha=0.65,label='$z$')
+        if accel:
+            ax2 = ax.twinx()
+            ax2.semilogy(freqs,accel_asd,lw=1,alpha=0.65,color=colors[len(ax.lines)],label='Accel.')
+            ax2.set_ylabel('ASD [$\mathrm{m/s^2}/\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
         ax.set_xlim([0.1,50])
         ax.set_ylim(ylim)
         ax.set_title('Calibrated spectra in ROI for '+descrip)
@@ -341,24 +351,37 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None):
         ax.loglog(freqs,pspd_x_asd,lw=1,alpha=0.65,label='PSPD $x$')
         ax.loglog(freqs,pspd_y_asd,lw=1,alpha=0.65,label='PSPD $y$')
         ax.loglog(freqs,z_asd,lw=1,alpha=0.65,label='$z$')
+        if accel:
+            ax2 = ax.twinx()
+            ax2.loglog(freqs,accel_asd,lw=1,alpha=0.65,color=colors[len(ax.lines)],label='Accel.')
+            ax2.set_ylabel('ASD [$\mathrm{m/s^2}/\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
         ax.set_xlim([0.1,max(freqs)])
         ax.set_ylim(ylim)
         ax.set_title('Full calibrated spectra for '+descrip)
     elif which=='rayleigh':
         if ylim is None:
-            ylim = [0,2]
-        ax.plot(freqs,rayleigh(qpd_x_asds**2),lw=1,alpha=0.65,label='QPD $x$')
-        ax.plot(freqs,rayleigh(qpd_y_asds**2),lw=1,alpha=0.65,label='QPD $y$')
-        ax.plot(freqs,rayleigh(pspd_x_asds**2),lw=1,alpha=0.65,label='PSPD $x$')
-        ax.plot(freqs,rayleigh(pspd_y_asds**2),lw=1,alpha=0.65,label='PSPD $y$')
-        ax.plot(freqs,rayleigh(z_asds**2),lw=1,alpha=0.65,label='$z$')
+            ylim = [1e-1,1e1]
+        ax.semilogy(freqs,rayleigh(qpd_x_asds**2),lw=1,alpha=0.65,label='QPD $x$')
+        ax.semilogy(freqs,rayleigh(qpd_y_asds**2),lw=1,alpha=0.65,label='QPD $y$')
+        ax.semilogy(freqs,rayleigh(pspd_x_asds**2),lw=1,alpha=0.65,label='PSPD $x$')
+        ax.semilogy(freqs,rayleigh(pspd_y_asds**2),lw=1,alpha=0.65,label='PSPD $y$')
+        ax.semilogy(freqs,rayleigh(z_asds**2),lw=1,alpha=0.65,label='$z$')
+        if accel:
+            ax2 = ax.twinx()
+            ax2.semilogy(freqs,rayleigh(accel_asds**2),lw=1,alpha=0.65,color=colors[len(ax.lines)],label='Accel.')
+            ax2.set_ylabel('ASD [$\mathrm{m/s^2}/\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
         ax.set_ylabel('Rayleigh statistic [1/$\sqrt{\mathrm{Hz}}$]')
         ax.set_xlabel('Frequency [Hz]')
         ax.set_xlim([0.1,50])
         ax.set_ylim(ylim)
         ax.set_title('Rayleigh spectra in ROI for '+descrip)
     ax.grid(which='both')
-    ax.legend(ncol=3)
+    if accel:
+        lines = ax.lines + ax2.lines
+        labels = [l.get_label() for l in lines]
+        ax.legend(lines,labels,ncol=3)
+    else:
+        ax.legend(ncol=3)
 
     # for some reason memory is not released and in subsequent function calls this can cause errors
     del qpd_x_asds,qpd_y_asds,pspd_x_asds,pspd_y_asds,z_asds,\
@@ -408,7 +431,7 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
         ax.set_xlabel('Time since '+start_date+' [hours]')
         ax.set_title('ROI '+sensor.upper()+' $'+axes[axis_ind]+'$ spectrogram for '+descrip)
         cbar = fig.colorbar(pcm)
-        cbar.set_label('ASD [N/$\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=15)
+        cbar.set_label('ASD [N/$\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
     elif which=='full':
         if (vmin is None) or (vmax is None):
             vmin = 2e-19
@@ -423,21 +446,21 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
         ax.set_yscale('log')
         ax.set_title('Full '+sensor.upper()+' $'+axes[axis_ind]+'$ spectrogram for '+descrip)
         cbar = fig.colorbar(pcm)
-        cbar.set_label('ASD [N/$\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=15)
+        cbar.set_label('ASD [N/$\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
     elif which=='rayleigh':
         if (vmin is None) or (vmax is None):
-            vmin = 0
-            vmax = 2
+            vmin = 1e-1
+            vmax = 1e1
         for i in range(spec_ray.shape[0]):
             spec_ray[i,:] = rayleigh(asds[i*t_bins:(i+1)*t_bins,:]**2)
             plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
-        pcm = ax.pcolormesh(plot_times,freqs,spec_ray.T,vmin=vmin,vmax=vmax,cmap='coolwarm')
+        pcm = ax.pcolormesh(plot_times,freqs,spec_ray.T,norm=LogNorm(vmin=vmin,vmax=vmax),cmap='coolwarm')
         ax.set_ylabel('Frequency [Hz]')
         ax.set_ylim([0.1,50])
         ax.set_xlabel('Time since '+start_date+' [hours]')
         ax.set_title(sensor.upper()+' $'+axes[axis_ind]+'$ Rayleigh spectrogram for '+descrip)
         cbar = fig.colorbar(pcm)
-        cbar.set_label('Rayleigh statistic [1/$\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=15)
+        cbar.set_label('Rayleigh statistic [1/$\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
 
     # for some reason memory is not released and in subsequent function calls this can cause errors
     del freqs,asds,times,av_times,start_date,hours
@@ -565,7 +588,7 @@ def position_drift(agg_dict,descrip=None,t_bin_width=600):
     l3 = ax2.plot(plot_times,bh_t,color=colors[2],ls='-.',label='Bead height')
     ls = l1+l2+l3
     labs = [l.get_label() for l in ls]
-    ax2.set_ylabel('Bead height [$\mu$m]',rotation=270,labelpad=15)
+    ax2.set_ylabel('Bead height [$\mu$m]',rotation=270,labelpad=16)
     ax[0].grid(which='both')
     ax[0].legend(ls,labs).set_zorder=(0)
 

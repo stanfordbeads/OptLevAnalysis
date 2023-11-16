@@ -8,7 +8,6 @@ style.use('optlevstyle.mplstyle')
 from data_processing import AggregateData
 import plotting as pl
 from funcs import *
-plt.rcParams['axes.prop_cycle'] = style.library['fivethirtyeight']['axes.prop_cycle']
 
 # command line arguments
 parser = argparse.ArgumentParser()
@@ -50,11 +49,11 @@ fig.savefig(fig_path+'tf_phase_pspd.png')
 plt.close('all')
 
 # plot spectra
-fig,ax = pl.spectra(aggdat.agg_dict,which='roi')
+fig,ax = pl.spectra(aggdat.agg_dict,which='roi',accel=True)
 fig.savefig(fig_path+'spectra_roi.png')
-fig,ax = pl.spectra(aggdat.agg_dict,which='full')
+fig,ax = pl.spectra(aggdat.agg_dict,which='full',accel=True)
 fig.savefig(fig_path+'spectra_full.png')
-fig,ax = pl.spectra(aggdat.agg_dict,which='rayleigh')
+fig,ax = pl.spectra(aggdat.agg_dict,which='rayleigh',accel=True)
 fig.savefig(fig_path+'spectra_rayleigh.png')
 plt.close('all')
 

@@ -175,6 +175,8 @@ def get_limit_from_likelihoods(likelihood_coeffs,confidence_level=0.95,alpha_sig
     '''
     # critical value of the test statistic ASSUMING WILKS'S THEOREM HOLDS
     con_val = chi2(1).ppf(confidence_level)*0.5
+    # first approx of true test stat asymptotic behavior
+    con_val = 10.
 
     # can either pass an array of likelihood functions, in which case test statistics will be
     # computed for each and summed, or only a single likelihood function

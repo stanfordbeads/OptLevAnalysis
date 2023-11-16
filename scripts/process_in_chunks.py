@@ -56,9 +56,13 @@ if os.path.exists(agg_path):
 # determine which raw files have been processed
 indices,first_index = get_loaded_indices(aggdat)
 
+# only save if we are adding new data to the object
+new_data = False
+
 # loop through and load data until all raw files have been processed
 while(len(indices)<min(num_raw_files,num_to_load)):
     print('Loading starting from file '+str(first_index))
+    new_data = True
 
     # data not yet loaded
     aggdat_temp = AggregateData([path],[prefix],[descrip],num_to_load=chunk_size,first_index=first_index)
@@ -80,5 +84,6 @@ while(len(indices)<min(num_raw_files,num_to_load)):
     del aggdat_temp
 
 # redo the binning and save the merged object
-aggdat.bin_by_aux_data()
-aggdat.save_to_hdf5()
+if new_data:
+    aggdat.bin_by_aux_data()
+    aggdat.save_to_hdf5()

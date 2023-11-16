@@ -52,7 +52,7 @@ class FileData:
         self.times = np.array(())
         self.amps = np.array(())
         self.phases = np.array(())
-        self.seismometer = np.array(())
+        self.accelerometer = np.array(())
         self.fsamp = 0
         self.nsamp = 0
         self.freqs = np.array(())
@@ -94,7 +94,7 @@ class FileData:
         self.date = re.search(r"\d{8,}", self.file_name)[0]
         self.read_hdf5()
         self.fsamp = self.data_dict['fsamp']
-        self.seismometer = self.data_dict['seismometer']
+        self.accelerometer = self.data_dict['accelerometer']
         self.bead_height = self.data_dict['bead_height']
         self.get_laser_power()
         if diagonalize_qpd:
@@ -109,9 +109,9 @@ class FileData:
         self.qpd_force_calibrated = self.calibrate_bead_response(tf_path=tf_path,sensor='QPD',\
                                                                  cal_drive_freq=cal_drive_freq,\
                                                                  no_tf=no_tf)
-        self.pspd_force_calibrated= self.calibrate_bead_response(tf_path=tf_path,sensor='PSPD',\
-                                                                 cal_drive_freq=cal_drive_freq,\
-                                                                 no_tf=no_tf)
+        self.pspd_force_calibrated = self.calibrate_bead_response(tf_path=tf_path,sensor='PSPD',\
+                                                                  cal_drive_freq=cal_drive_freq,\
+                                                                  no_tf=no_tf)
         self.pspd_force_calibrated[2,:] = np.copy(self.qpd_force_calibrated[2,:])
         self.get_boolean_cant_mask(num_harmonics=num_harmonics,harms=harms,\
                                    cant_drive_freq=cant_drive_freq,width=width)
@@ -142,12 +142,12 @@ class FileData:
             dd['cant_data'] = np.array(f['cant_data'],dtype=np.float64)
             dd['quad_data'] = np.array(f['quad_data'],dtype=np.float64)
             try:
-                dd['seismometer'] = np.array(f['seismometer'])
+                dd['accelerometer'] = np.array(f['seismometer'])
                 dd['laser_power'] = np.array(f['laser_power'])
                 dd['p_trans'] = np.array(f['p_trans'])
                 dd['pspd_data'] = np.array(f['PSPD'])
             except:
-                dd['seismometer'] = np.zeros_like(dd['cant_data'][0])
+                dd['accelerometer'] = np.zeros_like(dd['cant_data'][0])
                 dd['laser_power'] = np.zeros_like(dd['cant_data'][0])
                 dd['pspd_data'] = np.zeros_like(dd['cant_data'])
                 dd['p_trans'] = np.zeros_like(dd['cant_data'][0])
@@ -355,7 +355,7 @@ class FileData:
         if not no_tf:
             # for data from 2023 and later, the code will automatically find the transfer
             # function in the right format. For old data, specify the path manually
-            if int(self.date) > 20230101:
+            if int(self.date) > 20230101 or sensor=='QPD':
                 Harr = self.tf_array_fitted(self.freqs,sensor,tf_path=tf_path)
             else:
                 tf_path = '/data/new_trap_processed/calibrations/transfer_funcs/20200320.trans'
@@ -915,7 +915,7 @@ class AggregateData:
         # data that is unique to each file goes in agg_dict
         times = []
         timestamp = []
-        seismometer = []
+        accelerometer = []
         bead_height = []
         mean_laser_power = []
         laser_power_full = []
@@ -940,7 +940,7 @@ class AggregateData:
         for i,f in enumerate(self.file_data_objs):
             timestamp.append(f.times[0]*1e-9)
             times.append(f.times)
-            seismometer.append(f.seismometer)
+            accelerometer.append(f.accelerometer)
             bead_height.append(f.bead_height)
             mean_laser_power.append(f.mean_laser_power)
             laser_power_full.append(f.laser_power_full)
@@ -972,7 +972,7 @@ class AggregateData:
         # convert lists to numpy arrays
         times = np.array(times)
         timestamp = np.array(timestamp)
-        seismometer = np.array(seismometer)
+        accelerometer = np.array(accelerometer)
         bead_height = np.array(bead_height)
         mean_laser_power = np.array(mean_laser_power)
         laser_power_full = np.array(laser_power_full)
@@ -997,7 +997,7 @@ class AggregateData:
         # add numpy arrays to the dictionary
         agg_dict['times'] = times
         agg_dict['timestamp'] = timestamp
-        agg_dict['seismometer'] = seismometer
+        agg_dict['accelerometer'] = accelerometer
         agg_dict['bead_height'] = bead_height
         agg_dict['mean_laser_power'] = mean_laser_power
         agg_dict['laser_power_full'] = laser_power_full
@@ -1101,20 +1101,20 @@ class AggregateData:
         self.bin_indices = np.delete(self.bin_indices,bad_file_indices,axis=0)
 
 
-    def bin_by_aux_data(self,cant_bin_widths=[1.,1.],seis_thresh=0.1,bias_bins=0):
+    def bin_by_aux_data(self,cant_bin_widths=[1.,1.],accel_thresh=0.1,bias_bins=0):
         '''
         Bins the data by some auxiliary data along a number of axes. Sets an object attribute
         containing a list of indices that can be used to specify into which bin of each parameter
         a file falls.
         bin_widths = [x_width_microns, z_width_microns]
         '''
-        print('Binning data by mean cantilever position and seismometer data...')
+        print('Binning data by mean cantilever position and accelerometer data...')
 
-        # add seismometer and bias
+        # add accelerometer and bias
         
         # p0_bead and diam_bead are done when data is loaded. Here, binning is done in
         # cantilever x, cantilever z, and bias. Each row of bin_indices is of the format
-        # [diam_ind, p0_bead_ind, descrips, cant_x_ind, cant_z_ind, seismometer_ind, \
+        # [diam_ind, p0_bead_ind, descrips, cant_x_ind, cant_z_ind, accelerometer_ind, \
         # bias_ind, spec_ind, is_bad]
 
         # first create bins in x and z given the bin widths provided
@@ -1175,8 +1175,8 @@ class AggregateData:
         self.cant_bins_z = cant_bins_z
 
         # update bin indices
-        self.bin_indices[:,5] = np.array([np.abs(np.mean(self.agg_dict['seismometer'],\
-                                                         axis=1))>seis_thresh]).astype(np.int32)
+        self.bin_indices[:,5] = np.array([np.abs(np.mean(self.agg_dict['accelerometer'],\
+                                                         axis=1))>accel_thresh]).astype(np.int32)
         print('Done binning data.')
 
 
@@ -1202,7 +1202,7 @@ class AggregateData:
         return diams,p0s,descrips,cant_xs,cant_zs
         
 
-    def get_slice_indices(self,diam_bead=-1.,descrip='',cant_x=[-1e4,1e4],cant_z=[-1e4,1e4],seis_veto=False):
+    def get_slice_indices(self,diam_bead=-1.,descrip='',cant_x=[-1e4,1e4],cant_z=[-1e4,1e4],acc_veto=False):
         '''
         Returns a single list of indices corresponding to the positions of files that pass the
         cuts given by the index array.
@@ -1277,10 +1277,10 @@ class AggregateData:
         if not len(cant_z_inds):
             raise Exception('Error: no bins found for the given range of cantilever x position!')
         
-        if seis_veto:
-            seis_inds = [0]
+        if accel_veto:
+            accel_inds = [0]
         else:
-            seis_inds = [0,1]
+            accel_inds = [0,1]
 
         # amplitude spectral density indices. should be degenerate with all others
         asd_inds = list(range(max(self.bin_indices[:,7]+1)))
@@ -1288,7 +1288,7 @@ class AggregateData:
         # get all possible combinations of the indices found above
         p0_bead_inds = list(range(len(self.p0_bead)))
         index_arrays = np.array([i for i in product(diam_bead_inds,p0_bead_inds,descrip_inds,\
-                                                    cant_x_inds,cant_z_inds,seis_inds,[0],asd_inds,[0])])
+                                                    cant_x_inds,cant_z_inds,accel_inds,[0],asd_inds,[0])])
 
         # needs to be updated to take a range of acceptable indices for any given dimension
         # then we will get a list of index_arrays and loop through doing this step to append
