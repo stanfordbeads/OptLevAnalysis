@@ -73,7 +73,7 @@ def polar_plots(agg_dict,descrip=None,indices=None,unwrap=False,axis_ind=0,senso
             ax.set_rlim([min(amp_bins),max(amp_bins)])
             ax.set_yticks([])
             ax.set_yticklabels([])
-        ax.set_title('{:.0f} labelpad=16'.format(harms[h]),fontsize=20)
+        ax.set_title('{:.0f} Hz'.format(harms[h]),fontsize=20)
     axs.flatten()[-1].axis('off')
 
     y_range_str = '({:.0e},{:.0e})'.format(axs.flatten()[0].get_ylim()[0],axs.flatten()[0].get_ylim()[1])
@@ -369,7 +369,7 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False):
         if accel:
             ax2 = ax.twinx()
             ax2.semilogy(freqs,rayleigh(accel_asds**2),lw=1,alpha=0.65,color=colors[len(ax.lines)],label='Accel.')
-            ax2.set_ylabel('ASD [$\mathrm{m/s^2}/\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
+            ax2.set_ylabel('Rayleigh statistic [1/$\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
         ax.set_ylabel('Rayleigh statistic [1/$\sqrt{\mathrm{Hz}}$]')
         ax.set_xlabel('Frequency [Hz]')
         ax.set_xlim([0.1,50])
@@ -404,12 +404,14 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
     nsamp = agg_dict['nsamp']
     fft_to_asd = np.sqrt(nsamp/2./fsamp)
     sensor_title = sensor.upper()
+    units = '\mathrm{N}'
     if sensor=='accel':
         # convert accelerometer data to m/s^2 using 1000 V/g calibration factor
         ffts = np.fft.rfft(agg_dict['accelerometer']*9.8/1000.,axis=1)[:,:len(freqs)]*2./nsamp
         asds = np.abs(ffts*fft_to_asd)
         axis_ind = 2
         sensor_title = 'Accelerometer'
+        units = '\mathrm{m/s^2}'
         if ((vmin is None) or (vmax is None)) and which!='rayleigh':
             vmin = 1e-6
             vmax = 1e-2
@@ -442,7 +444,7 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
         ax.set_xlabel('Time since '+start_date+' [hours]')
         ax.set_title(sensor_title+' $'+axes[axis_ind]+'$ ROI spectrogram for '+descrip)
         cbar = fig.colorbar(pcm)
-        cbar.set_label('ASD [N/$\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
+        cbar.set_label('ASD [$'+units+'/\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
     elif which=='full':
         if (vmin is None) or (vmax is None):
             vmin = 2e-19
@@ -457,7 +459,7 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
         ax.set_yscale('log')
         ax.set_title(sensor_title+' $'+axes[axis_ind]+'$ full spectrogram for '+descrip)
         cbar = fig.colorbar(pcm)
-        cbar.set_label('ASD [N/$\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
+        cbar.set_label('ASD [$'+units+'/\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
     elif which=='rayleigh':
         if (vmin is None) or (vmax is None):
             vmin = 1e-1

@@ -1202,7 +1202,7 @@ class AggregateData:
         return diams,p0s,descrips,cant_xs,cant_zs
         
 
-    def get_slice_indices(self,diam_bead=-1.,descrip='',cant_x=[-1e4,1e4],cant_z=[-1e4,1e4],acc_veto=False):
+    def get_slice_indices(self,diam_bead=-1.,descrip='',cant_x=[-1e4,1e4],cant_z=[-1e4,1e4],accel_veto=False):
         '''
         Returns a single list of indices corresponding to the positions of files that pass the
         cuts given by the index array.
