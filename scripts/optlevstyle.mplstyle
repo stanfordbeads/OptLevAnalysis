@@ -6,6 +6,7 @@ savefig.bbox: tight
 
 ### TEXT
 text.usetex: True
+text.latex.preamble: \usepackage[cm]{sfmath}
 
 ### LINES
 lines.linewidth: 1.5

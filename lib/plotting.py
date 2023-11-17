@@ -603,7 +603,7 @@ def position_drift(agg_dict,descrip=None,t_bin_width=600):
     labs = [l.get_label() for l in ls]
     ax2.set_ylabel('Bead height [$\mu$m]',rotation=270,labelpad=16)
     ax[0].grid(which='both')
-    ax[0].legend(ls,labs).set_zorder=(0)
+    ax[0].legend(ls,labs)
 
     ax[1].plot(plot_times,cx_t,label='Cant. $x~-$ {:.1f} $\mu$m'.format(x0))
     ax[1].plot(plot_times,cz_t,label='Cant. $z~-$ {:.1f} $\mu$m'.format(z0))
