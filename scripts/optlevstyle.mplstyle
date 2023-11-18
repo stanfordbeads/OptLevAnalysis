@@ -6,7 +6,7 @@ savefig.bbox: tight
 
 ### TEXT
 text.usetex: True
-text.latex.preamble: \usepackage[cm]{sfmath}
+text.latex.preamble: \usepackage{sfmath} \usepackage{upgreek}
 
 ### LINES
 lines.linewidth: 1.5
@@ -41,8 +41,9 @@ font.size: 14
 
 ### GRIDS
 grid.color: b0b0b0
+grid.alpha: 0.5
 grid.linestyle: --
-grid.linewidth: 0.5
+grid.linewidth: 0.9
 
 ### AXES
 axes.grid: False
