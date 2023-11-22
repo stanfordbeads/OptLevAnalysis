@@ -82,10 +82,10 @@ def polar_plots(agg_dict,descrip=None,indices=None,unwrap=False,axis_ind=0,senso
     textStr = '{} force bins log-spaced in '.format(len(amp_bins))+y_range_str+' N.\n Force scale is log.\n'
     textStr += '{} phase bins, linearly spaced.\n'.format(len(phase_bins))
     if plot_templates:
-        textStr += 'Diamonds are for $\\upalpha$ ranging \n from $10^{'+alpha_min+'}$ to $10^{'+alpha_max+'}$.\n'
-        textStr += 'Blue diamonds mean $\\upalpha >0$.\n'
-        textStr += 'Green diamonds mean $\\upalpha <0$.\n'
-        textStr += 'Phase is relative to $\\upalpha >0$.\n'
+        textStr += 'Diamonds are for $\\alpha$ ranging \n from $10^{'+alpha_min+'}$ to $10^{'+alpha_max+'}$.\n'
+        textStr += 'Blue diamonds mean $\\alpha >0$.\n'
+        textStr += 'Green diamonds mean $\\alpha <0$.\n'
+        textStr += 'Phase is relative to $\\alpha >0$.\n'
     axs.flatten()[-1].text(-0.2,0., textStr, transform = axs.flatten()[-1].transAxes)
     cbar = fig.colorbar(im, ax=axs.flatten()[-1], orientation='horizontal', fraction=0.1)
     cbar.ax.set_xlabel('Number of 10s datasets',fontsize=18)
@@ -370,6 +370,7 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False):
             ax2 = ax.twinx()
             ax2.semilogy(freqs,rayleigh(accel_asds**2),lw=1,alpha=0.65,color=colors[len(ax.lines)],label='Accel.')
             ax2.set_ylabel('Rayleigh statistic [1/$\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
+            ax2.set_ylim(ylim)
         ax.set_ylabel('Rayleigh statistic [1/$\sqrt{\mathrm{Hz}}$]')
         ax.set_xlabel('Frequency [Hz]')
         ax.set_xlim([0.1,50])
@@ -593,21 +594,21 @@ def position_drift(agg_dict,descrip=None,t_bin_width=600):
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
     fig,ax = plt.subplots(2,1,figsize=(8,8),sharex=True)
-    l1 = ax[0].plot(plot_times,lp_t,color=colors[0],alpha=0.65,label='Laser power')
-    l2 = ax[0].plot(plot_times,pt_t*40,color=colors[1],alpha=0.65,label='Trans. power ($\\times 40$)')
+    l1 = ax[0].plot(plot_times,lp_t*1e3,color=colors[0],alpha=0.65,label='Laser power')
+    l2 = ax[0].plot(plot_times,pt_t*40e3,color=colors[1],alpha=0.65,label='Trans. power ($\\times 40$)')
     ax[0].set_title('Time evolution of laser power, bead height, and cantilever position')
-    ax[0].set_ylabel('Power [mW]')
+    ax[0].set_ylabel('Power [$\mu$W]')
     ax2 = ax[0].twinx()
-    l3 = ax2.plot(plot_times,bh_t,color=colors[2],ls='-.',label='Bead height')
+    l3 = ax2.plot(plot_times,bh_t*1e3,color=colors[2],ls='-.',label='Bead height')
     ls = l1+l2+l3
     labs = [l.get_label() for l in ls]
-    ax2.set_ylabel('Bead height [$\\upmu$m]',rotation=270,labelpad=16)
+    ax2.set_ylabel('Bead height [nm]',rotation=270,labelpad=16)
     ax[0].grid(which='both')
-    ax[0].legend(ls,labs)
+    ax2.legend(ls,labs)
 
-    ax[1].plot(plot_times,cx_t,label='Cant. $x~-$ {:.1f} $\\upmu$m'.format(x0))
-    ax[1].plot(plot_times,cz_t,label='Cant. $z~-$ {:.1f} $\\upmu$m'.format(z0))
-    ax[1].set_ylabel('Cantilever position drift [$\\upmu$m]')
+    ax[1].plot(plot_times,cx_t,label='Cant. $x~-$ {:.1f} $\mu$m'.format(x0))
+    ax[1].plot(plot_times,cz_t,label='Cant. $z~-$ {:.1f} $\mu$m'.format(z0))
+    ax[1].set_ylabel('Cantilever position drift [$\mu$m]')
     ax[1].set_xlabel('Time since '+start_date+' [hours]')
     ax[1].set_xlim([min(plot_times),max(plot_times)])
     ax[1].grid(which='both')
@@ -664,10 +665,10 @@ def mles_vs_time(agg_dict,descrip=None,sensor='qpd',axis_ind=0,t_bin_width=600):
         ax.errorbar(plot_times,alpha_hat_t[:,i]/1e8,yerr=2.*err_alpha_t[:,i]/1e8,color=colors(i),ls='none',\
                     alpha=0.65,ms=3,marker='o',label='{:.0f} Hz'.format(harm_freqs[i]))
     ax.plot([], [], ' ', label='95\% CL errors',zorder=0)
-    ax.set_title('MLE of $\\upalpha(\\uplambda=10\\upmu \mathrm{m})$ for '+sensor.upper()+axes[axis_ind]+' over time')
+    ax.set_title('MLE of $\\alpha(\lambda=10\mu \mathrm{m})$ for '+sensor.upper()+axes[axis_ind]+' over time')
     ax.set_xlabel('Time since '+start_date+' [hours]')
     ax.set_xlim([min(plot_times),max(plot_times)])
-    ax.set_ylabel('$\hat{\\upalpha} / 10^8$')
+    ax.set_ylabel('$\hat{\\alpha} / 10^8$')
     ax.grid(which='both')
     handles, labels = ax.get_legend_handles_labels()
     order = list(range(1,alpha_hat_t.shape[1]+1))+[0]

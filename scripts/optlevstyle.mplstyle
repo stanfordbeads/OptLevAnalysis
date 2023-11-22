@@ -6,7 +6,7 @@ savefig.bbox: tight
 
 ### TEXT
 text.usetex: True
-text.latex.preamble: \usepackage{sfmath} \usepackage{upgreek}
+text.latex.preamble: \usepackage[eulergreek]{sansmath} \sansmath
 
 ### LINES
 lines.linewidth: 1.5
