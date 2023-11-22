@@ -22,7 +22,7 @@ def polar_plots(agg_dict,descrip=None,indices=None,unwrap=False,axis_ind=0,senso
     if indices is None:
         indices = np.array(range(agg_dict['qpd_ffts'].shape[0]))
     if vmax is None:
-        vmax = int(len(agg_dict['timestamp'])/40)
+        vmax = int(len(agg_dict['timestamp'])/100)
     freqs = agg_dict['freqs']
     harms = freqs[agg_dict['good_inds']]
     cmap_polar = plt.get_cmap('inferno') 
@@ -483,12 +483,15 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
 
 
 def time_evolution(agg_dict,descrip=None,sensor='qpd',axis_ind=0,\
-                   t_bin_width=600,ylim=None):
+                   t_bin_width=None,ylim=None):
     '''
     Plot the time evolution of the measurement of a sensor along a given axis.
     '''
     if descrip is None:
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
+
+    if t_bin_width is None:
+        t_bin_width = max(600,int((agg_dict['timestamp'][-1]-agg_dict['timestamp'][0])/20))
 
     # get timing information from the dictionary
     times = agg_dict['times']
@@ -548,13 +551,16 @@ def time_evolution(agg_dict,descrip=None,sensor='qpd',axis_ind=0,\
     return fig,ax
 
 
-def position_drift(agg_dict,descrip=None,t_bin_width=600):
+def position_drift(agg_dict,descrip=None,t_bin_width=None):
     '''
     Plot the drift over time in the position of the bead and cantilever,
     along with the laser and transmitted power.
     '''
     if descrip is None:
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
+
+    if t_bin_width is None:
+        t_bin_width = max(600,int((agg_dict['timestamp'][-1]-agg_dict['timestamp'][0])/20))
 
     # get parameters to plot
     lp = agg_dict['mean_laser_power']
@@ -620,13 +626,16 @@ def position_drift(agg_dict,descrip=None,t_bin_width=600):
     return fig,ax
 
 
-def mles_vs_time(agg_dict,descrip=None,sensor='qpd',axis_ind=0,t_bin_width=600):
+def mles_vs_time(agg_dict,descrip=None,sensor='qpd',axis_ind=0,t_bin_width=None):
     '''
     Plot the MLE for alpha over time for a few harmonics.
     '''
 
     if descrip is None:
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
+
+    if t_bin_width is None:
+        t_bin_width = max(600,int((agg_dict['timestamp'][-1]-agg_dict['timestamp'][0])/20))
     
     times = agg_dict['times']
     av_times = np.mean(times,axis=1)
