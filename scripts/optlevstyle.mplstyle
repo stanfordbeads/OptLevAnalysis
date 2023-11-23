@@ -26,6 +26,7 @@ xtick.major.width: 1.2
 xtick.minor.size: 2
 xtick.minor.width: 0.9
 xtick.color: black
+xtick.labelsize: 14
 ytick.left: True
 ytick.direction: out
 ytick.major.size: 3.5
@@ -33,6 +34,7 @@ ytick.major.width: 1.2
 ytick.minor.size: 2
 ytick.minor.width: 0.9
 ytick.color: black
+ytick.labelsize: 14
 
 ### FONTS
 font.family: sans-serif

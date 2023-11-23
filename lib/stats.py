@@ -201,8 +201,18 @@ def get_limit_from_likelihoods(likelihood_coeffs,confidence_level=0.95,alpha_sig
         alpha_high = sign*alphas[min(alpha_ind + 1,len(alphas)-1)]
         alpha_guess = alphas[alpha_ind]
 
+    # set the bounds so the minimizer does not wander into the region where the
+    # test stat is always zero
+    alpha_hats = likelihood_coeffs[:,-1]
+    min_alpha_hat = alpha_sign*np.amin(alpha_sign*alpha_hats[alpha_hats*alpha_sign>0])
+    bounds = [None,None]
+    if min_alpha_hat<0:
+        bounds[1] = min_alpha_hat
+    else:
+        bounds[0] = min_alpha_hat
+
     # now minimize it properly
-    result = minimize(limit_func,alpha_guess,tol=1e-9)
+    result = minimize(limit_func,alpha_guess,bounds=(bounds,),tol=1e-9)
 
     # if the function value at the fit is too large, return nan 
     if np.abs(result.fun) > 0.5*con_val:
@@ -252,11 +262,11 @@ def get_alpha_vs_lambda(likelihood_coeffs,lambdas,discovery=False,\
         neg_limit = []
         for i in range(len(lambdas)):
             pos_limit.append(get_limit_from_likelihoods(likelihood_coeffs[:,i,:],\
-                                                                confidence_level=confidence_level,\
-                                                                alpha_sign=1))
+                                                        confidence_level=confidence_level,\
+                                                        alpha_sign=1))
             neg_limit.append(get_limit_from_likelihoods(likelihood_coeffs[:,i,:],\
-                                                                confidence_level=confidence_level,\
-                                                                alpha_sign=-1))
+                                                        confidence_level=confidence_level,\
+                                                        alpha_sign=-1))
         pos_limit = np.array(pos_limit)
         neg_limit = -np.array(neg_limit)
         return pos_limit,neg_limit
