@@ -1,7 +1,7 @@
 import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.colors import LogNorm
-import matplotlib
+import matplotlib.style as style
 from datetime import datetime
 from scipy import signal
 import h5py
@@ -392,12 +392,15 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False):
 
 
 def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
-                t_bin_width=600,vmin=None,vmax=None):
+                t_bin_width=None,vmin=None,vmax=None):
     '''
     Plot a spectrogram for the given dataset.
     '''
     if descrip is None:
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
+
+    if t_bin_width is None:
+        t_bin_width = max(60,int((agg_dict['timestamp'][-1]-agg_dict['timestamp'][0])/100))
 
     axes = ['x','y','z']
     freqs = agg_dict['freqs']
@@ -491,7 +494,7 @@ def time_evolution(agg_dict,descrip=None,sensor='qpd',axis_ind=0,\
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
 
     if t_bin_width is None:
-        t_bin_width = max(600,int((agg_dict['timestamp'][-1]-agg_dict['timestamp'][0])/20))
+        t_bin_width = max(60,int((agg_dict['timestamp'][-1]-agg_dict['timestamp'][0])/20))
 
     # get timing information from the dictionary
     times = agg_dict['times']
@@ -560,7 +563,7 @@ def position_drift(agg_dict,descrip=None,t_bin_width=None):
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
 
     if t_bin_width is None:
-        t_bin_width = max(600,int((agg_dict['timestamp'][-1]-agg_dict['timestamp'][0])/20))
+        t_bin_width = max(60,int((agg_dict['timestamp'][-1]-agg_dict['timestamp'][0])/20))
 
     # get parameters to plot
     lp = agg_dict['mean_laser_power']
@@ -635,7 +638,7 @@ def mles_vs_time(agg_dict,descrip=None,sensor='qpd',axis_ind=0,t_bin_width=None)
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
 
     if t_bin_width is None:
-        t_bin_width = max(600,int((agg_dict['timestamp'][-1]-agg_dict['timestamp'][0])/20))
+        t_bin_width = max(60,int((agg_dict['timestamp'][-1]-agg_dict['timestamp'][0])/20))
     
     times = agg_dict['times']
     av_times = np.mean(times,axis=1)
@@ -673,7 +676,7 @@ def mles_vs_time(agg_dict,descrip=None,sensor='qpd',axis_ind=0,t_bin_width=None)
     for i in range(alpha_hat_t.shape[1]):
         ax.errorbar(plot_times,alpha_hat_t[:,i]/1e8,yerr=2.*err_alpha_t[:,i]/1e8,color=colors(i),ls='none',\
                     alpha=0.65,ms=3,marker='o',label='{:.0f} Hz'.format(harm_freqs[i]))
-    ax.plot([], [], ' ', label='95\% CL errors',zorder=0)
+    ax.plot([], [], ' ', label='95\% CI errors',zorder=0)
     ax.set_title('MLE of $\\alpha(\lambda=10\mu \mathrm{m})$ for '+sensor.upper()+axes[axis_ind]+' over time')
     ax.set_xlabel('Time since '+start_date+' [hours]')
     ax.set_xlim([min(plot_times),max(plot_times)])
@@ -686,4 +689,126 @@ def mles_vs_time(agg_dict,descrip=None,sensor='qpd',axis_ind=0,t_bin_width=None)
     del times, av_times, start_date, hours, harm_freqs, lamb_ind, likelihood_coeffs,\
         delta_t, t_bins, num_t_bins, alpha_hat_t, plot_times, colors
     
+    return fig,ax
+
+
+def alpha_limit(agg_dict,descrip=None,sensor='qpd'):
+    '''
+    Plot the alpha-lambda limit for a dataset.
+    '''
+
+    if descrip is None:
+        descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
+
+    # compute the limit for this dataset
+    likelihood_coeffs = fit_alpha_all_files(agg_dict,sensor=sensor)
+    likelihood_coeffs = combine_likelihoods_by_harm(likelihood_coeffs)
+    lambdas = agg_dict['template_params'][0]
+    likelihood_coeffs_all = group_likelihoods_by_test(likelihood_coeffs)
+    limit_pos,limit_neg = get_alpha_vs_lambda(likelihood_coeffs_all,lambdas)
+
+    # get the other previously saved limits
+    lims = h5py.File('/home/clarkeh/limits_all.h5','r')
+
+    fig,ax = plt.subplots()
+    colors = style.library['fivethirtyeight']['axes.prop_cycle'].by_key()['color']
+    ax.loglog(lambdas*1e6,np.array(limit_pos),ls='-',lw=2,color=colors[0],alpha=0.6,label=r'This result $\alpha>0$')
+    ax.loglog(lambdas*1e6,np.array(limit_neg),ls='--',lw=2,color=colors[1],alpha=0.6,label=r'This result $\alpha<0$')
+    ax.loglog(np.array(lims['wilson/lambda_pos'])*1e6,np.array(lims['wilson/alpha_pos']),\
+              ls='-',lw=2,color=colors[2],alpha=0.6,label=r'Wilson $\alpha>0$')
+    ax.loglog(np.array(lims['wilson/lambda_neg'])*1e6,np.array(lims['wilson/alpha_neg']),\
+              ls='--',lw=2,color=colors[3],alpha=0.6,label=r'Wilson $\alpha<0$')
+    ax.loglog(np.array(lims['best/lambda'])*1e6,np.array(lims['best/alpha']),\
+              ls=':',lw=2,color=colors[4],alpha=0.6)
+    ax.fill_between(np.array(lims['best/lambda'])*1e6,np.array(lims['best/alpha']),\
+                    1e15*np.ones_like(np.array(lims['best/alpha'])),color=colors[4],alpha=0.2)
+    ax.set_title(r'{{{}}} limits from {{{}}} files for {{{}}}'\
+                 .format(sensor.upper(),len(agg_dict['timestamp']),descrip))
+    ax.set_xlabel(r'$\lambda$ [$\mu$m]')
+    ax.set_ylabel(r'$\alpha$')
+    ax.set_xlim([1e0,1e2])
+    ax.set_ylim([1e2,1e12])
+    ax.grid(which='both')
+    ax.legend(ncol=2)
+
+    del colors,lims,likelihood_coeffs,lambdas,likelihood_coeffs_all,limit_pos,\
+        limit_neg,descrip,sensor
+    
+    return fig,ax
+
+
+def limit_vs_integration(agg_dict,descrip=None,sensor='qpd'):
+    '''
+    Plot the evolution of the limit with increasing integration time.
+    '''
+
+    if descrip is None:
+        descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
+
+    # sample subsets of the data with a given size and calculate alpha for each
+    num_files = len(agg_dict['timestamp'])
+    num_chunks = 5
+    subset_inds = np.logspace(0,np.log10(num_files),num_chunks).astype(int)
+    lambdas = agg_dict['template_params'][0]
+    ten_um_ind = np.argmin(np.abs(lambdas-1e-5))
+    num_samples = 10
+    lim_pos = np.zeros((num_samples,len(subset_inds)))
+    lim_neg = np.zeros((num_samples,len(subset_inds)))
+
+    for i in range(num_samples):
+        for j,ind in enumerate(subset_inds):
+            indices = np.random.randint(0,num_files,ind)
+            like_coeffs = fit_alpha_all_files(agg_dict,indices,sensor=sensor)
+            like_coeffs = combine_likelihoods_by_harm(like_coeffs)
+            like_coeffs = group_likelihoods_by_test(like_coeffs)
+            lim_pos[i,j] = get_limit_from_likelihoods(like_coeffs[:,ten_um_ind,:],alpha_sign=1)
+            lim_neg[i,j] = get_limit_from_likelihoods(like_coeffs[:,ten_um_ind,:],alpha_sign=-1)
+
+    # find the mean for each number of datasets
+    lim_pos_mean = []
+    lim_neg_mean = []
+    sigma_pos = []
+    sigma_neg = []
+
+    for i in range(num_chunks):
+        lim_pos_mean.append(np.mean(lim_pos[:,i][~np.isnan(lim_pos[:,i])]))
+        sigma_pos.append(np.std(lim_pos[:,i][~np.isnan(lim_pos[:,i])],axis=0))
+        lim_neg_mean.append(-np.mean(lim_neg[:,i][~np.isnan(lim_neg[:,i])],axis=0))
+        sigma_neg.append(np.std(lim_neg[:,i][~np.isnan(lim_neg[:,i])],axis=0))
+
+    lim_pos_mean = np.array(lim_pos_mean)
+    lim_neg_mean = np.array(lim_neg_mean)
+    sigma_pos = np.array(sigma_pos)
+    sigma_neg = np.array(sigma_neg)
+
+    # show how integration time should increase in a noise-limited measurement
+    first_lim_pos = lim_pos_mean[~np.isnan(lim_pos_mean)][0]
+    integ_times = 10**np.arange(1,num_chunks+1)
+    noise_lim_pos = first_lim_pos/np.sqrt(integ_times/10)
+
+    first_lim_neg = lim_neg_mean[~np.isnan(lim_neg_mean)][0]
+    noise_lim_neg = first_lim_neg/np.sqrt(integ_times/10)
+
+    fig,ax = plt.subplots()
+    colors = style.library['fivethirtyeight']['axes.prop_cycle'].by_key()['color']
+    ax.fill_between(subset_inds*10,lim_pos_mean-sigma_pos,\
+                    lim_pos_mean+sigma_pos,alpha=0.3,color=colors[0],lw=0,zorder=0)
+    ax.fill_between(subset_inds*10,lim_neg_mean-sigma_neg,\
+                    lim_neg_mean+sigma_neg,alpha=0.3,color=colors[1],lw=0,zorder=2)
+    ax.loglog(subset_inds*10,lim_pos_mean,label=r'$\alpha>0$ measured $\pm1\sigma$',color=colors[0],zorder=1)
+    ax.loglog(integ_times,noise_lim_pos,ls=':',alpha=0.7,label=r'$\alpha>0$ if noise limited',color=colors[0],zorder=4)
+    ax.loglog(subset_inds*10,lim_neg_mean,label=r'$\alpha<0$ measured $\pm1\sigma$',color=colors[1],zorder=3)
+    ax.loglog(integ_times,noise_lim_neg,ls=':',alpha=0.7,label=r'$\alpha<0$ if noise limited',color=colors[1],zorder=5)
+    ax.set_xlabel('Integration time [s]')
+    ax.set_ylabel(r'95\% CL limit on $\alpha(\lambda=10\mu\mathrm{m})$')
+    ax.set_title(r'{{{}}} limits vs integration time for {{{}}}'.format(sensor.upper(),descrip))
+    ax.set_xlim([min(subset_inds*10),max(subset_inds*10)])
+    ax.set_ylim([0.5*min(noise_lim_neg[-1],noise_lim_pos[-1]),2*max(first_lim_pos,first_lim_neg)])
+    ax.legend(ncol=2)
+    ax.grid()
+
+    del num_files,num_chunks,subset_inds,lambdas,ten_um_ind,num_samples,lim_pos,lim_neg,\
+        lim_pos_mean,lim_neg_mean,sigma_pos,sigma_neg,first_lim_pos,first_lim_neg,integ_times,\
+        noise_lim_pos,noise_lim_neg,colors
+
     return fig,ax
