@@ -262,11 +262,11 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000):
     rows = 3
     if sensor=='PSPD':
         rows = 2
-    title = 'Magnitudes'
+    title = 'magnitudes'
     if phase:
-        title = 'Phases'
+        title = 'phases'
     fig,ax = plt.subplots(rows,3,figsize=(9,2*rows+1),sharex=True,sharey=True)
-    fig.suptitle('Transfer Function '+title+' for the '+sensor)
+    fig.suptitle('Transfer function '+title+' for the '+sensor)
     for i in range(rows):
         if phase:
             ax[i,0].set_ylabel('Phase [$^\circ$]')
@@ -369,7 +369,6 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False):
         if accel:
             ax2 = ax.twinx()
             ax2.semilogy(freqs,rayleigh(accel_asds**2),lw=1,alpha=0.65,color=colors[len(ax.lines)],label='Accel.')
-            ax2.set_ylabel('Rayleigh statistic [1/$\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
             ax2.set_ylim(ylim)
         ax.set_ylabel('Rayleigh statistic [1/$\sqrt{\mathrm{Hz}}$]')
         ax.set_xlabel('Frequency [Hz]')
@@ -414,7 +413,7 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
         ffts = np.fft.rfft(agg_dict['accelerometer']*9.8/1000.,axis=1)[:,:len(freqs)]*2./nsamp
         asds = np.abs(ffts*fft_to_asd)
         axis_ind = 2
-        sensor_title = 'Accelerometer'
+        sensor_title = 'Accel.'
         units = '\mathrm{m/s^2}'
         if ((vmin is None) or (vmax is None)) and which!='rayleigh':
             vmin = 1e-6
@@ -605,7 +604,7 @@ def position_drift(agg_dict,descrip=None,t_bin_width=None):
     fig,ax = plt.subplots(2,1,figsize=(8,8),sharex=True)
     l1 = ax[0].plot(plot_times,lp_t*1e3,color=colors[0],alpha=0.65,label='Laser power')
     l2 = ax[0].plot(plot_times,pt_t*40e3,color=colors[1],alpha=0.65,label='Trans. power ($\\times 40$)')
-    ax[0].set_title('Time evolution of laser power, bead height, and cantilever position')
+    ax[0].set_title('Time evolution of parameters for '+descrip)
     ax[0].set_ylabel('Power [$\mu$W]')
     ax2 = ax[0].twinx()
     l3 = ax2.plot(plot_times,bh_t*1e3,color=colors[2],ls='-.',label='Bead height')
@@ -645,7 +644,7 @@ def mles_vs_time(agg_dict,descrip=None,sensor='qpd',axis_ind=0,t_bin_width=None)
     start_date = datetime.fromtimestamp(av_times[0]*1e-9).strftime('%b %d, %H:%M:%S')
     hours = (av_times-av_times[0])*1e-9/3600.
     harm_freqs = agg_dict['freqs'][agg_dict['good_inds']]
-    axes = [' $x$',' $y$',' $z$']
+    axes = ['$x$','$y$','$z$']
 
     # index where lambda is 10 um
     lamb_ind = np.argmin(np.abs(agg_dict['template_params'][0,:]-1e-5))
@@ -677,10 +676,11 @@ def mles_vs_time(agg_dict,descrip=None,sensor='qpd',axis_ind=0,t_bin_width=None)
         ax.errorbar(plot_times,alpha_hat_t[:,i]/1e8,yerr=2.*err_alpha_t[:,i]/1e8,color=colors(i),ls='none',\
                     alpha=0.65,ms=3,marker='o',label='{:.0f} Hz'.format(harm_freqs[i]))
     ax.plot([], [], ' ', label='95\% CI errors',zorder=0)
-    ax.set_title('MLE of $\\alpha(\lambda=10\mu \mathrm{m})$ for '+sensor.upper()+axes[axis_ind]+' over time')
+    ax.set_title(r'MLE of $\alpha(\lambda=10\mu \mathrm{{m}})$ from {{{}}} {{{}}} for {{{}}}'\
+                 .format(sensor.upper(),axes[axis_ind],descrip))
     ax.set_xlabel('Time since '+start_date+' [hours]')
     ax.set_xlim([min(plot_times),max(plot_times)])
-    ax.set_ylabel('$\hat{\\alpha} / 10^8$')
+    ax.set_ylabel(r'$\hat{\alpha} / 10^8$')
     ax.grid(which='both')
     handles, labels = ax.get_legend_handles_labels()
     order = list(range(1,alpha_hat_t.shape[1]+1))+[0]
