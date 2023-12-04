@@ -6,7 +6,7 @@ import pickle
 import yaml
 import time
 import scipy.interpolate as interp
-import scipy.signal as signal
+import scipy.signal as sig
 from scipy.optimize import curve_fit, minimize
 from tqdm import tqdm
 from joblib import Parallel, delayed
@@ -55,6 +55,9 @@ class FileData:
         self.accelerometer = np.array(())
         self.fsamp = 0
         self.nsamp = 0
+        self.window_s1 = 0
+        self.window_s2 = 0
+        self.window = np.array(())
         self.freqs = np.array(())
         self.cant_raw_data = np.array(((),(),()))
         self.quad_raw_data = np.array(((),(),()))
@@ -86,7 +89,7 @@ class FileData:
 
 
     def load_data(self,tf_path=None,cal_drive_freq=71.0,max_freq=2500.,num_harmonics=10,\
-                  harms=[],width=0,noise_bins=10,diagonalize_qpd=False,wiener=False,\
+                  harms=[],width=0,noise_bins=10,diagonalize_qpd=False,downsample=True,wiener=True,\
                   cant_drive_freq=3.0,signal_model=None,p0_bead=None,lightweight=False,no_tf=False):
         '''
         Applies calibrations to the cantilever data and QPD data, then gets FFTs for both.
@@ -102,9 +105,15 @@ class FileData:
         self.get_xyz_from_quad()
         self.get_signal_likeness()
         self.pspd_raw_data = self.data_dict['pspd_data']
+        self.cant_raw_data = self.data_dict['cant_data']
         self.nsamp = len(self.times)
+        self.window_s1 = np.copy(self.nsamp)
+        self.window_s2 = np.copy(self.nsamp)
+        self.window = np.ones(self.nsamp)
         freqs = np.fft.rfftfreq(self.nsamp, d=1.0/self.fsamp)
         self.freqs = freqs[freqs<=max_freq]
+        if downsample:
+            self.filter_raw_data(wiener)
         self.calibrate_stage_position()
         self.calibrate_bead_response(tf_path=tf_path,sensor='QPD',cal_drive_freq=cal_drive_freq,no_tf=no_tf)
         self.calibrate_bead_response(tf_path=tf_path,sensor='PSPD',cal_drive_freq=cal_drive_freq,no_tf=no_tf)
@@ -266,9 +275,6 @@ class FileData:
         Convert voltage in cant_data into microns. Returns a tuple of x,y,z
         '''
 
-        # get the cantilever data from the data dict
-        self.cant_raw_data = self.data_dict['cant_data']
-
         # may want to look at datasets with no cant_data
         if not len(self.cant_raw_data):
             self.cant_raw_data = np.zeros_like(self.quad_raw_data)
@@ -307,6 +313,115 @@ class FileData:
 
         # set object attribute with a numpy array of x,y,z
         self.quad_raw_data = np.array([x.astype(np.float64)/quad_sum,y.astype(np.float64)/quad_sum,phases[4]])
+
+
+    def filter_raw_data(self,wiener=False):
+        '''
+        Downsample the time series for all sensors, then use a pre-trained Wiener filter to subtract
+        coherent noise coupling in from the table.
+        '''
+
+        # set the downsampling factor
+        ds_factor = 20
+
+        # load the pre-trained filters for this data
+        with h5py.File('/data/new_trap_processed/calibrations/data_processing_filters/' +\
+                       self.date + '/wienerFilters.h5','r') as filter_file:
+            LPF = filter_file['LPF'][:]
+            W_x_qpd = filter_file['QPD/W_x'][:]
+            W_y_qpd = filter_file['QPD/W_y'][:]
+            W_z_qpd = filter_file['QPD/W_z'][:]
+            W_x_pspd = filter_file['PSPD/W_x'][:]
+            W_y_pspd = filter_file['PSPD/W_y'][:]
+
+        # get arrays of the raw time series
+        qpd_x,qpd_y,qpd_z = tuple(self.quad_raw_data)
+        pspd_x,pspd_y,_ = tuple(self.pspd_raw_data)
+        accel = self.accelerometer
+        cant_x,cant_y,cant_z = tuple(self.cant_raw_data)
+
+
+        ###### for debugging, remove later
+        self.quad_raw_data_old = np.copy(self.quad_raw_data)
+        self.freqs_old = np.copy(self.freqs)
+
+        # detrend the data
+        qpd_x -= np.mean(qpd_x)
+        qpd_y -= np.mean(qpd_y)
+        qpd_z -= np.mean(qpd_z)
+        pspd_x -= np.mean(pspd_x)
+        pspd_y -= np.mean(pspd_y)
+        accel -= np.mean(accel)
+        mean_cant_x = np.mean(cant_x)
+        mean_cant_y = np.mean(cant_y)
+        mean_cant_z = np.mean(cant_z)
+
+        # make the DLTI filter from the zeros, poles, and gain saved in the hdf5 file
+        dlti_filter = sig.dlti(LPF,1.0)
+
+        # downsample the data prior to applying the Wiener filter
+        qpd_x_lpf = sig.decimate(qpd_x, ds_factor, ftype=dlti_filter, zero_phase=True)
+        qpd_y_lpf = sig.decimate(qpd_y, ds_factor, ftype=dlti_filter, zero_phase=True)
+        qpd_z_lpf = sig.decimate(qpd_z, ds_factor, ftype=dlti_filter, zero_phase=True)
+        pspd_x_lpf = sig.decimate(pspd_x,ds_factor,ftype=dlti_filter, zero_phase=True)
+        pspd_y_lpf = sig.decimate(pspd_y,ds_factor,ftype=dlti_filter, zero_phase=True)
+        accel_lpf = sig.decimate(accel, ds_factor, ftype=dlti_filter, zero_phase=True)
+        cant_x_lpf = sig.decimate(cant_x-mean_cant_x, ds_factor,ftype=dlti_filter,zero_phase=True) + mean_cant_x
+        cant_y_lpf = sig.decimate(cant_y-mean_cant_y, ds_factor,ftype=dlti_filter,zero_phase=True) + mean_cant_y
+        cant_z_lpf = sig.decimate(cant_z-mean_cant_z, ds_factor,ftype=dlti_filter,zero_phase=True) + mean_cant_z
+        laser_power = sig.decimate(self.laser_power_full-self.mean_laser_power,ds_factor,\
+                                   ftype=dlti_filter,zero_phase=True) + self.mean_laser_power
+        p_trans = sig.decimate(self.p_trans_full-self.mean_p_trans,ds_factor,\
+                               ftype=dlti_filter,zero_phase=True) + self.mean_p_trans
+        times = self.times[::ds_factor]
+
+        if wiener:
+            # apply the Wiener filter to each sensor
+            pred_qpd_x = sig.lfilter(W_x_qpd[0], 1.0, accel_lpf)
+            pred_qpd_y = sig.lfilter(W_y_qpd[0], 1.0, accel_lpf)
+            pred_qpd_z = sig.lfilter(W_z_qpd[0], 1.0, accel_lpf)
+            pred_pspd_x = sig.lfilter(W_x_pspd[0], 1.0, accel_lpf)
+            pred_pspd_y = sig.lfilter(W_y_pspd[0], 1.0, accel_lpf)
+        else:
+            pred_qpd_x = np.zeros_like(qpd_x_lpf)
+            pred_qpd_y = np.zeros_like(qpd_y_lpf)
+            pred_qpd_z = np.zeros_like(qpd_z_lpf)
+            pred_pspd_x = np.zeros_like(pspd_x_lpf)
+            pred_pspd_y = np.zeros_like(pspd_x_lpf)
+
+        # subtract off the coherent noise
+        qpd_x_w = qpd_x_lpf - pred_qpd_x
+        qpd_y_w = qpd_y_lpf - pred_qpd_y
+        qpd_z_w = qpd_z_lpf - pred_qpd_z
+        pspd_x_w = pspd_x_lpf - pred_pspd_x
+        pspd_y_w = pspd_y_lpf - pred_pspd_y
+
+        # window the data to remove transient artifacts from filtering
+        # but not the cantilever data as force(window(cant_position))=/=window(force(cant_position))
+        win = sig.get_window(('tukey',0.05), len(qpd_x_w))
+        self.window_s1 = np.sum(win)
+        self.window_s2 = np.sum(win**2)
+        qpd_x_w *= win
+        qpd_y_w *= win
+        qpd_z_w *= win
+        pspd_x_w *= win
+        pspd_y_w *= win
+        accel_lpf *= win
+
+        # replace existing class attributes with filtered data
+        self.quad_raw_data = np.array((qpd_x_w, qpd_y_w, qpd_z_w))
+        self.pspd_raw_data = np.array((pspd_x_w, pspd_y_w, qpd_z_w))
+        self.accelerometer = accel_lpf
+        self.cant_raw_data = np.array((cant_x_lpf,cant_y_lpf,cant_z_lpf))
+        self.laser_power_full = laser_power
+        self.p_trans_full = p_trans
+        self.times = times
+
+        # reset the frequency, number of samples, sampling frequency, and window attributes
+        self.freqs = np.fft.rfftfreq(len(qpd_x_lpf),ds_factor/self.fsamp)
+        self.nsamp = len(qpd_x_lpf)
+        self.fsamp = self.fsamp/ds_factor
+        self.window = win
 
 
     def get_signal_likeness(self):
@@ -398,7 +513,7 @@ class FileData:
         bead_force_cal = np.fft.irfft(calibrated_fft)
 
         # normalize to get the peak amplitude spectrum
-        norm_factor = 2./self.nsamp
+        norm_factor = 2./self.window_s1
 
         # set calibrated time series and ffts as class attributes
         if sensor=='QPD':
@@ -423,12 +538,12 @@ class FileData:
             ### Compute TF at frequencies of interest. Appropriately inverts
             ### so we can map response -> drive
             Harr = np.zeros((len(freqs), 3, 3), dtype=complex)
-            Harr[:,0,0] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zXX'], tf_file['fits/'+sensor+'/pXX'], \
-                                            tf_file['fits/'+sensor+'/kXX']/tf_file.attrs['scaleFactors_'+sensor][0], 2*np.pi*freqs)[1]
-            Harr[:,1,1] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zYY'], tf_file['fits/'+sensor+'/pYY'], \
-                                            tf_file['fits/'+sensor+'/kYY']/tf_file.attrs['scaleFactors_'+sensor][1], 2*np.pi*freqs)[1]
-            Harr[:,2,2] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zZZ'], tf_file['fits/'+sensor+'/pZZ'], \
-                                            tf_file['fits/'+sensor+'/kZZ']/tf_file.attrs['scaleFactors_'+sensor][2], 2*np.pi*freqs)[1]
+            Harr[:,0,0] = 1/sig.freqs_zpk(tf_file['fits/'+sensor+'/zXX'], tf_file['fits/'+sensor+'/pXX'], \
+                                          tf_file['fits/'+sensor+'/kXX']/tf_file.attrs['scaleFactors_'+sensor][0], 2*np.pi*freqs)[1]
+            Harr[:,1,1] = 1/sig.freqs_zpk(tf_file['fits/'+sensor+'/zYY'], tf_file['fits/'+sensor+'/pYY'], \
+                                          tf_file['fits/'+sensor+'/kYY']/tf_file.attrs['scaleFactors_'+sensor][1], 2*np.pi*freqs)[1]
+            Harr[:,2,2] = 1/sig.freqs_zpk(tf_file['fits/'+sensor+'/zZZ'], tf_file['fits/'+sensor+'/pZZ'], \
+                                          tf_file['fits/'+sensor+'/kZZ']/tf_file.attrs['scaleFactors_'+sensor][2], 2*np.pi*freqs)[1]
             tf_file.close()
 
         return Harr
@@ -707,8 +822,11 @@ class FileData:
             forces.append(signal_model.get_force_at_pos(positions,[ind]))
         forces = np.array(forces)
 
+        # apply the same window to the force data as the quad data
+        forces = forces*self.window[None,:,None]
+
         # now do ffts of the forces along the cantilever drive to get the harmonics
-        force_ffts = np.fft.rfft(forces,axis=1)[:,good_inds,:]*2./nsamp
+        force_ffts = np.fft.rfft(forces,axis=1)[:,good_inds,:]*2./self.window_s1
         
         self.template_ffts = force_ffts.swapaxes(1,2)
         self.template_params = params
@@ -805,7 +923,7 @@ class AggregateData:
 
 
     def load_file_data(self,num_cores=1,diagonalize_qpd=False,load_templates=False,harms=[],\
-                       max_freq=500.,no_tf=False,no_config=False,lightweight=True):
+                       max_freq=500.,downsample=True,wiener=True,no_tf=False,no_config=False,lightweight=True):
         '''
         Create a FileData object for each of the files in the file list and load
         in the relevant data for physics analysis.
@@ -821,7 +939,8 @@ class AggregateData:
         print('Loading data from {} files...'.format(len(self.file_list)))
         file_data_objs = Parallel(n_jobs=num_cores)(delayed(self.process_file)\
                                                     (file_path,diagonalize_qpd,signal_models[self.bin_indices[i,0]],\
-                                                     self.p0_bead[self.bin_indices[i,1]],harms,max_freq,no_tf,lightweight) \
+                                                     self.p0_bead[self.bin_indices[i,1]],harms,max_freq,downsample,\
+                                                     wiener,no_tf,lightweight) \
                                                      for i,file_path in enumerate(tqdm(self.file_list)))
         # record which files are bad and save the error logs
         error_logs = []
@@ -867,14 +986,15 @@ class AggregateData:
         
 
     def process_file(self,file_path,diagonalize_qpd=False,signal_model=None,p0_bead=None,\
-                     harms=[],max_freq=500.,no_tf=False,lightweight=True):
+                     harms=[],max_freq=500.,downsample=True,wiener=True,no_tf=False,lightweight=True):
         '''
         Process data for an individual file and return the FileData object
         '''
         this_file = FileData(file_path)
         try:
             this_file.load_data(diagonalize_qpd=diagonalize_qpd,signal_model=signal_model,p0_bead=p0_bead,\
-                                harms=harms,max_freq=max_freq,no_tf=no_tf,lightweight=lightweight)
+                                harms=harms,downsample=downsample,wiener=wiener,max_freq=max_freq,\
+                                no_tf=no_tf,lightweight=lightweight)
         except Exception as e:
             this_file.is_bad = True
             this_file.error_log = repr(e)
@@ -894,6 +1014,8 @@ class AggregateData:
         agg_dict['freqs'] = np.array(self.file_data_objs[0].freqs)
         agg_dict['fsamp'] = int(self.file_data_objs[0].fsamp)
         agg_dict['nsamp'] = int(self.file_data_objs[0].nsamp)
+        agg_dict['window_s1'] = self.file_data_objs[0].window_s1
+        agg_dict['window_s2'] = self.file_data_objs[0].window_s2
         agg_dict['fund_ind'] = int(self.file_data_objs[0].fund_ind)
         agg_dict['good_inds'] = np.array(self.file_data_objs[0].good_inds)
 
@@ -1308,8 +1430,7 @@ class AggregateData:
         index_arrays = np.unique(self.bin_indices,axis=0)
 
         # get sampling parameters in order to compute ASD from the DFTs
-        freqs = self.agg_dict['freqs']
-        fft_to_asd = np.sqrt(self.agg_dict['nsamp']/2./self.agg_dict['fsamp'])
+        fft_to_asd = self.agg_dict['window_s1']/np.sqrt(2.*self.agg_dict['fsamp']*self.agg_dict['window_s2'])
 
         # initialize lists to store the spectra
         qpd_asds = []
@@ -1372,7 +1493,7 @@ class AggregateData:
         for f in freq_ranges:
             freq_inds.append(np.argmin(np.abs(freqs-f)))
 
-        fft_to_asd = np.sqrt(self.agg_dict['nsamp']/2./self.agg_dict['fsamp'])
+        fft_to_asd = self.agg_dict['window_s1']/np.sqrt(2.*self.agg_dict['fsamp']*self.agg_dict['window_s2'])
 
         # get RMS of the ffts for the data used for the fit
         mean_ffts_x = np.sqrt(np.mean(np.abs(np.fft.rfft(self.agg_dict['quad_raw_data'][fit_inds][:,0,:])\
@@ -1414,10 +1535,10 @@ class AggregateData:
         # get the ffts and phase shift them relative to quadrant 1
         fft_qpd_1_all = np.fft.rfft(raw_qpd_1)
         phase_qpd_1 = np.angle(fft_qpd_1_all)
-        fft_qpd_1 = np.mean(fft_qpd_1_all*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['nsamp'],axis=0)[:len(freqs)]
-        fft_qpd_2 = np.mean(np.fft.rfft(raw_qpd_2)*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['nsamp'],axis=0)[:len(freqs)]
-        fft_qpd_3 = np.mean(np.fft.rfft(raw_qpd_3)*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['nsamp'],axis=0)[:len(freqs)]
-        fft_qpd_4 = np.mean(np.fft.rfft(raw_qpd_4)*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['nsamp'],axis=0)[:len(freqs)]
+        fft_qpd_1 = np.mean(fft_qpd_1_all*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['window_s1'],axis=0)[:len(freqs)]
+        fft_qpd_2 = np.mean(np.fft.rfft(raw_qpd_2)*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['window_s1'],axis=0)[:len(freqs)]
+        fft_qpd_3 = np.mean(np.fft.rfft(raw_qpd_3)*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['window_s1'],axis=0)[:len(freqs)]
+        fft_qpd_4 = np.mean(np.fft.rfft(raw_qpd_4)*np.exp(-1j*phase_qpd_1)*2./self.agg_dict['window_s1'],axis=0)[:len(freqs)]
 
         if plot:
             fig,ax = plt.subplots(2,1,sharex=True)

@@ -177,8 +177,9 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None):
 
     freqs = agg_dict['freqs']
     fsamp = agg_dict['fsamp']
-    nsamp = agg_dict['nsamp']
-    fft_to_asd = np.sqrt(nsamp/2./fsamp)
+    window_s1 = agg_dict['window_s1']
+    window_s2 = agg_dict['window_s2']
+    fft_to_asd = window_s1/np.sqrt(2.*fsamp*window_s2)
 
     signal_mat = np.array((raw_qpd_1,raw_qpd_2,raw_qpd_3,raw_qpd_4))
 
@@ -303,8 +304,9 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False):
 
     freqs = agg_dict['freqs']
     fsamp = agg_dict['fsamp']
-    nsamp = agg_dict['nsamp']
-    fft_to_asd = np.sqrt(nsamp/2./fsamp)
+    window_s1 = agg_dict['window_s1']
+    window_s2 = agg_dict['window_s2']
+    fft_to_asd = window_s1/np.sqrt(2.*fsamp*window_s2)
 
     qpd_x_asds = np.abs(agg_dict['qpd_ffts_full'][:,0,:]*fft_to_asd)
     qpd_y_asds = np.abs(agg_dict['qpd_ffts_full'][:,1,:]*fft_to_asd)
@@ -312,7 +314,7 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False):
     pspd_y_asds = np.abs(agg_dict['pspd_ffts_full'][:,1,:]*fft_to_asd)
     z_asds = np.abs(agg_dict['qpd_ffts_full'][:,2,:]*fft_to_asd)
     # convert accelerometer data to m/s^2 using 1000 V/g calibration factor
-    accel_ffts = np.fft.rfft(agg_dict['accelerometer']*9.8/1000.,axis=1)[:,:len(freqs)]*2./nsamp
+    accel_ffts = np.fft.rfft(agg_dict['accelerometer']*9.8/1000.,axis=1)[:,:len(freqs)]*2./window_s1
     accel_asds = np.abs(accel_ffts*fft_to_asd)
 
     qpd_x_asd = np.sqrt(np.mean(qpd_x_asds**2,axis=0))
@@ -404,13 +406,14 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
     axes = ['x','y','z']
     freqs = agg_dict['freqs']
     fsamp = agg_dict['fsamp']
-    nsamp = agg_dict['nsamp']
-    fft_to_asd = np.sqrt(nsamp/2./fsamp)
+    window_s1 = agg_dict['window_s1']
+    window_s2 = agg_dict['window_s2']
+    fft_to_asd = window_s1/np.sqrt(2.*fsamp*window_s2)
     sensor_title = sensor.upper()
     units = '\mathrm{N}'
     if sensor=='accel':
         # convert accelerometer data to m/s^2 using 1000 V/g calibration factor
-        ffts = np.fft.rfft(agg_dict['accelerometer']*9.8/1000.,axis=1)[:,:len(freqs)]*2./nsamp
+        ffts = np.fft.rfft(agg_dict['accelerometer']*9.8/1000.,axis=1)[:,:len(freqs)]*2./window_s1
         asds = np.abs(ffts*fft_to_asd)
         axis_ind = 2
         sensor_title = 'Accel.'
@@ -502,8 +505,9 @@ def time_evolution(agg_dict,descrip=None,sensor='qpd',axis_ind=0,\
     hours = (av_times-av_times[0])*1e-9/3600.
     freqs = agg_dict['freqs']
     fsamp = agg_dict['fsamp']
-    nsamp = agg_dict['nsamp']
-    fft_to_asd = np.sqrt(nsamp/2./fsamp)
+    window_s1 = agg_dict['window_s1']
+    window_s2 = agg_dict['window_s2']
+    fft_to_asd = window_s1/np.sqrt(2.*fsamp*window_s2)
     good_freqs = freqs[agg_dict['good_inds']]
     axes = ['x','y','z']
     colors = plt.get_cmap('plasma',len(good_freqs)+1)
