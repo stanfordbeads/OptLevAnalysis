@@ -2,7 +2,7 @@
 This package contains analysis code used by the Stanford optical levitation lab to search for non-Newtonian interactions at the micron scale.
 
 ## Installation
-It is highly recommended that you install this inside a virtual environment using `venv` or `conda`. From within the environment, run the following in the `OptLevAnalysis` directory:
+It is highly recommended that you install this inside a virtual environment using `venv` or `conda`, since the specific `numpy` and `scipy` versions listed in [`requirements.txt`](requirements.txt) are required in order to avoid known performance issues with later versions. From within the environment, run the following in the `OptLevAnalysis` directory:
 ```
 pip install -e .
 ```
