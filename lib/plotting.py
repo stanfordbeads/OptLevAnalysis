@@ -287,8 +287,10 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000):
             else:
                 ax[i,j].loglog(tf_freqs[i,j],np.abs(tf_data[i,j]),linestyle='none',\
                                marker='o',ms=4,alpha=0.5,label='Measurement')
-                ax[i,j].loglog(freqs[tf_freq_inds[i,j]],force_cal_factors[i]*np.ones(len(tf_data[i,j]))\
-                               /np.abs(Harr[:,i,j][tf_freq_inds[i,j]]),lw=2,label='Fit')
+                if i==j:
+                    ax[i,j].loglog(freqs[tf_freq_inds[i,j]],force_cal_factors[i]*np.ones(len(tf_data[i,j]))\
+                                   /np.abs(Harr[:,i,j][tf_freq_inds[i,j]]),lw=2,label='Fit')
+                    ax[i,j].text(1.5,2e-3,r'{{{:.3e}}} N/count'.format(force_cal_factors[i]),fontsize=14)
             ax[i,j].grid(which='both')
         ax[i,i].legend(fontsize=10)
 
