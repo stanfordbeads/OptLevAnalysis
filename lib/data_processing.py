@@ -1162,8 +1162,6 @@ class AggregateData:
             self.bin_indices[lower_ind:upper_ind,2] = i
             self.bin_indices[lower_ind:upper_ind,3] = i
 
-        print(self.bin_indices)
-
         # now remove any duplicates and fix the corresponding entries in the bin_indices array
         self.__remove_duplicate_bead_params()
     
