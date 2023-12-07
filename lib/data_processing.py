@@ -1421,7 +1421,7 @@ class AggregateData:
         
         # get all possible combinations of the indices found above
         p0_bead_inds = list(range(len(self.p0_bead)))
-        index_arrays = np.array([i for i in product(diam_bead_inds,p0_bead_inds,descrip_inds,\
+        index_arrays = np.array([i for i in product(diam_bead_inds,[0],p0_bead_inds,descrip_inds,\
                                                     cant_x_inds,cant_z_inds,accel_inds,[0],asd_inds,[0])])
 
         # needs to be updated to take a range of acceptable indices for any given dimension
