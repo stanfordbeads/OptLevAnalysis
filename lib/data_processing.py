@@ -781,10 +781,12 @@ class FileData:
         for the Yukawa-modified gravity model in which the only parameter is lambda.
         '''
 
-        # bead mass in kilograms. If not provided, use the nominal mass from the template
+        # mass_bead argument should be in picograms. If no bead mass provided,
+        # use the nominal mass from the template
         if mass_bead==0:
             mass_fac = 1.
         else:
+            mass_bead *= 1e-15 # convert from picograms to kg
             mass_nom = 4./3.*np.pi*signal_model.rad_bead**3*signal_model.rho_bead
             mass_fac = mass_bead/mass_nom
 
