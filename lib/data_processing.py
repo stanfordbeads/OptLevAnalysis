@@ -89,9 +89,9 @@ class FileData:
 
 
     def load_data(self,tf_path=None,cal_drive_freq=71.0,max_freq=2500.,num_harmonics=10,\
-                  harms=[],width=0,noise_bins=10,diagonalize_qpd=False,downsample=True,wiener=True,\
-                  cant_drive_freq=3.0,signal_model=None,p0_bead=None,mass_bead=0,lightweight=False,\
-                  no_tf=False):
+                  harms=[],width=0,noise_bins=10,diagonalize_qpd=False,downsample=True,\
+                  wiener=[False,True,False,False,False],cant_drive_freq=3.0,signal_model=None,\
+                  p0_bead=None,mass_bead=0,lightweight=False,no_tf=False):
         '''
         Applies calibrations to the cantilever data and QPD data, then gets FFTs for both.
         '''
@@ -316,10 +316,11 @@ class FileData:
         self.quad_raw_data = np.array([x.astype(np.float64)/quad_sum,y.astype(np.float64)/quad_sum,phases[4]])
 
 
-    def filter_raw_data(self,wiener=False):
+    def filter_raw_data(self,wiener=[False,True,False,False,False]):
         '''
         Downsample the time series for all sensors, then use a pre-trained Wiener filter to subtract
-        coherent noise coupling in from the table.
+        coherent noise coupling in from the table. Input "wiener" is a list of bools which specifies
+        whether to subtract coherent accelerometer z noise from [QPD x, QPD y, z, PSPD x, PSPD y]
         '''
 
         # set the downsampling factor
@@ -370,27 +371,23 @@ class FileData:
         p_trans = sig.decimate(self.p_trans_full-self.mean_p_trans,ds_factor,\
                                ftype=dlti_filter,zero_phase=True) + self.mean_p_trans
         times = self.times[::ds_factor]
-
-        if wiener:
-            # apply the Wiener filter to each sensor
-            pred_qpd_x = sig.lfilter(W_x_qpd[0], 1.0, accel_lpf)
-            pred_qpd_y = sig.lfilter(W_y_qpd[0], 1.0, accel_lpf)
-            pred_qpd_z = sig.lfilter(W_z_qpd[0], 1.0, accel_lpf)
-            pred_pspd_x = sig.lfilter(W_x_pspd[0], 1.0, accel_lpf)
-            pred_pspd_y = sig.lfilter(W_y_pspd[0], 1.0, accel_lpf)
-        else:
-            pred_qpd_x = np.zeros_like(qpd_x_lpf)
-            pred_qpd_y = np.zeros_like(qpd_y_lpf)
-            pred_qpd_z = np.zeros_like(qpd_z_lpf)
-            pred_pspd_x = np.zeros_like(pspd_x_lpf)
-            pred_pspd_y = np.zeros_like(pspd_x_lpf)
+        
+        # loop through and apply the filter for all sensors specified by the
+        # input argument
+        filters = [W_x_qpd[0],W_y_qpd[0],W_z_qpd[0],W_x_pspd[0],W_y_pspd[0]]
+        preds = []
+        for w,filter in zip(wiener,filters):
+            if w:
+                preds.append(sig.lfilter(filter, 1.0, accel_lpf))
+            else:
+                preds.append(np.zeros_like(qpd_x_lpf))
 
         # subtract off the coherent noise
-        qpd_x_w = qpd_x_lpf - pred_qpd_x
-        qpd_y_w = qpd_y_lpf - pred_qpd_y
-        qpd_z_w = qpd_z_lpf - pred_qpd_z
-        pspd_x_w = pspd_x_lpf - pred_pspd_x
-        pspd_y_w = pspd_y_lpf - pred_pspd_y
+        qpd_x_w = qpd_x_lpf - preds[0]
+        qpd_y_w = qpd_y_lpf - preds[1]
+        qpd_z_w = qpd_z_lpf - preds[2]
+        pspd_x_w = pspd_x_lpf - preds[3]
+        pspd_y_w = pspd_y_lpf - preds[4]
 
         # window the data to remove transient artifacts from filtering
         # but not the cantilever data as force(window(cant_position))=/=window(force(cant_position))
@@ -933,7 +930,8 @@ class AggregateData:
 
 
     def load_file_data(self,num_cores=1,diagonalize_qpd=False,load_templates=False,harms=[],\
-                       max_freq=500.,downsample=True,wiener=True,no_tf=False,no_config=False,lightweight=True):
+                       max_freq=500.,downsample=True,wiener=[False,True,False,False,False],\
+                       no_tf=False,no_config=False,lightweight=True):
         '''
         Create a FileData object for each of the files in the file list and load
         in the relevant data for physics analysis.
@@ -1002,7 +1000,8 @@ class AggregateData:
         
 
     def process_file(self,file_path,diagonalize_qpd=False,signal_model=None,p0_bead=None,mass_bead=0,\
-                     harms=[],max_freq=500.,downsample=True,wiener=True,no_tf=False,lightweight=True):
+                     harms=[],max_freq=500.,downsample=True,wiener=[False,True,False,False,False],\
+                     no_tf=False,lightweight=True):
         '''
         Process data for an individual file and return the FileData object
         '''
