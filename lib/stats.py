@@ -8,7 +8,7 @@ from funcs import *
 # AggregateData objects.
 # ************************************************************************ #
 
-def fit_alpha_all_files(agg_dict,file_indices=None,sensor='qpd',use_sl=False):
+def fit_alpha_all_files(agg_dict,file_indices=None,sensor='qpd',use_ml=False):
     '''
     Find the best fit alpha to a dataset. Most of this should eventually be moved to
     stats.py so that different likelihood functions can be called from here.
@@ -19,12 +19,12 @@ def fit_alpha_all_files(agg_dict,file_indices=None,sensor='qpd',use_sl=False):
     
     likelihood_coeffs = []
     for i in file_indices:
-        likelihood_coeffs.append(fit_alpha_for_file(agg_dict,i,sensor,use_sl=use_sl))
+        likelihood_coeffs.append(fit_alpha_for_file(agg_dict,i,sensor,use_ml=use_ml))
 
     return np.array(likelihood_coeffs)
 
 
-def fit_alpha_for_file(agg_dict,file_index,sensor='qpd',use_sl=False):
+def fit_alpha_for_file(agg_dict,file_index,sensor='qpd',use_ml=False):
     '''
     Find the best fit alpha for a single file and return it. This function will be
     called in parallel so that all files can be processed to produce a limit.
@@ -36,7 +36,7 @@ def fit_alpha_for_file(agg_dict,file_index,sensor='qpd',use_sl=False):
     bead_sb_ffts = agg_dict[sensor+'_sb_ffts'][file_index]
     num_sb = int(bead_sb_ffts.shape[1]/bead_ffts.shape[1])
     good_inds = agg_dict['good_inds']
-    sig_likes = agg_dict['sig_likes'][file_index][:,good_inds]
+    mot_likes = agg_dict['mot_likes'][file_index][:,good_inds]
     likelihood_coeffs = np.zeros((len(good_inds),3,len(lambdas),4),dtype=np.float128)
     
     for harm,_ in enumerate(good_inds):
@@ -44,10 +44,10 @@ def fit_alpha_for_file(agg_dict,file_index,sensor='qpd',use_sl=False):
 
             sb_fft_array = bead_sb_ffts[axis,harm*num_sb:(harm+1)*num_sb]
             data = bead_ffts[axis,harm]
-            if use_sl and axis!=2:
-                sl = sig_likes[axis,harm]
+            if use_ml and axis!=2:
+                ml = mot_likes[axis,harm]
                 noise = np.mean(np.abs(sb_fft_array)**2)
-                data = np.sqrt(sl*max(0,np.abs(data)**2-noise) + noise)*np.exp(1j*np.angle(data))
+                data = np.sqrt(ml*max(0,np.abs(data)**2-noise) + noise)*np.exp(1j*np.angle(data))
             data_real = np.real(data)
             data_imag = np.imag(data)
             var = (1./(2.*num_sb))*np.sum(np.real(sb_fft_array)**2+np.imag(sb_fft_array)**2)

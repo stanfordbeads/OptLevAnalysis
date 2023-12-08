@@ -104,7 +104,6 @@ class FileData:
         if diagonalize_qpd:
             self.get_diag_mat()
         self.get_xyz_from_quad()
-        self.get_signal_likeness()
         self.pspd_raw_data = self.data_dict['pspd_data']
         self.cant_raw_data = self.data_dict['cant_data']
         self.nsamp = len(self.times)
@@ -122,6 +121,7 @@ class FileData:
         self.get_boolean_cant_mask(num_harmonics=num_harmonics,harms=harms,\
                                    cant_drive_freq=cant_drive_freq,width=width)
         self.get_ffts_and_noise(noise_bins=noise_bins)
+        self.get_motion_likeness()
         if signal_model is not None:
             self.make_templates(signal_model,p0_bead,mass_bead=mass_bead)
         # for use with AggregateData, don't carry around all the raw data
@@ -417,36 +417,25 @@ class FileData:
         self.window = win
 
 
-    def get_signal_likeness(self):
+    def get_motion_likeness(self,ml_model=None):
         '''
-        Try selecting only opposite-phase motion of x, y, and z to filter scattered light backgrounds.
+        Option to use a motion-likeness metric to measure/subtract scattered light
+        backrounds. Argument "ml_model" is a function that takes the amps array and
+        returns motion likeness in x and y.
         '''
 
         _,amps,_ = self.extract_quad()
 
-        # ffts of each quadrant
-        Q1 = np.fft.rfft(amps[0])
-        Q2 = np.fft.rfft(amps[1])
-        Q3 = np.fft.rfft(amps[2])
-        Q4 = np.fft.rfft(amps[3])
-
-        # all phases relative to quadrant 1
-        rot = np.exp(-1j*np.angle(Q1))
-        Q1 *= rot
-        Q2 *= rot
-        Q3 *= rot
-        Q4 *= rot
-
-        # signal-likeness parameter
-        signal_likeness_x = np.abs((Q1 + Q2 - Q3 - Q4)/(Q1 + Q2 + Q3 + Q4))
-        signal_likeness_y = np.abs((Q1 - Q2 + Q3 - Q4)/(Q1 + Q2 + Q3 + Q4))
-
-        # values >1 are maximally signal-like
-        signal_likeness_x[signal_likeness_x>1] = 1
-        signal_likeness_y[signal_likeness_y>1] = 1
+        # by default, everything is considered motion-like.
+        if ml_model is None:
+            motion_likeness_x = np.ones_like(amps[0])
+            motion_likeness_y = np.ones_like(amps[0])
+        else:
+            motion_likeness_x,motion_likeness_y = ml_model(amps)
 
         # set object attribute with a numpy array of x and y
-        self.signal_likeness = np.array([signal_likeness_x,signal_likeness_y])
+        self.motion_likeness = np.array([motion_likeness_x[:len(self.freqs)],\
+                                         motion_likeness_y[:len(self.freqs)]])
 
 
     def calibrate_bead_response(self,tf_path=None,sensor='QPD',cal_drive_freq=71.0,\
@@ -1057,7 +1046,7 @@ class AggregateData:
         cant_fft = []
         quad_amps = []
         quad_phases = []
-        sig_likes = []
+        mot_likes = []
 
         for i,f in enumerate(self.file_data_objs):
             timestamp.append(f.times[0]*1e-9)
@@ -1082,7 +1071,7 @@ class AggregateData:
             cant_fft.append(f.cant_fft)
             quad_amps.append(f.quad_amps)
             quad_phases.append(f.quad_phases)
-            sig_likes.append(f.signal_likeness)
+            mot_likes.append(f.motion_likeness)
             if lightweight:
                 # delete the object once data has been extracted
                 self.file_data_objs[i] = FileData()
@@ -1114,7 +1103,7 @@ class AggregateData:
         cant_fft = np.array(cant_fft)
         quad_amps = np.array(quad_amps)
         quad_phases = np.array(quad_phases)
-        sig_likes = np.array(sig_likes)
+        mot_likes = np.array(mot_likes)
 
         # add numpy arrays to the dictionary
         agg_dict['times'] = times
@@ -1139,7 +1128,7 @@ class AggregateData:
         agg_dict['cant_fft'] = cant_fft
         agg_dict['quad_amps'] = quad_amps
         agg_dict['quad_phases'] = quad_phases
-        agg_dict['sig_likes'] = sig_likes
+        agg_dict['mot_likes'] = mot_likes
 
         self.agg_dict = agg_dict
         print('Done building dictionary.')
