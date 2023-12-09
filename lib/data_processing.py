@@ -91,7 +91,7 @@ class FileData:
     def load_data(self,tf_path=None,cal_drive_freq=71.0,max_freq=2500.,num_harmonics=10,\
                   harms=[],width=0,noise_bins=10,diagonalize_qpd=False,downsample=True,\
                   wiener=[False,True,False,False,False],cant_drive_freq=3.0,signal_model=None,\
-                  p0_bead=None,mass_bead=0,lightweight=False,no_tf=False):
+                  ml_model=None,p0_bead=None,mass_bead=0,lightweight=False,no_tf=False):
         '''
         Applies calibrations to the cantilever data and QPD data, then gets FFTs for both.
         '''
@@ -121,7 +121,7 @@ class FileData:
         self.get_boolean_cant_mask(num_harmonics=num_harmonics,harms=harms,\
                                    cant_drive_freq=cant_drive_freq,width=width)
         self.get_ffts_and_noise(noise_bins=noise_bins)
-        self.get_motion_likeness()
+        self.get_motion_likeness(ml_model=ml_model)
         if signal_model is not None:
             self.make_templates(signal_model,p0_bead,mass_bead=mass_bead)
         # for use with AggregateData, don't carry around all the raw data
@@ -920,7 +920,7 @@ class AggregateData:
 
     def load_file_data(self,num_cores=1,diagonalize_qpd=False,load_templates=False,harms=[],\
                        max_freq=500.,downsample=True,wiener=[False,True,False,False,False],\
-                       no_tf=False,no_config=False,lightweight=True):
+                       no_tf=False,no_config=False,ml_model=None,lightweight=True):
         '''
         Create a FileData object for each of the files in the file list and load
         in the relevant data for physics analysis.
@@ -936,7 +936,7 @@ class AggregateData:
         print('Loading data from {} files...'.format(len(self.file_list)))
         file_data_objs = Parallel(n_jobs=num_cores)(delayed(self.process_file)\
                                                     (file_path,diagonalize_qpd,signal_models[self.bin_indices[i,0]],\
-                                                     self.p0_bead[self.bin_indices[i,2]],\
+                                                     ml_model,self.p0_bead[self.bin_indices[i,2]],\
                                                      self.mass_bead[self.bin_indices[i,1]],harms,\
                                                      max_freq,downsample,wiener,no_tf,lightweight) \
                                                      for i,file_path in enumerate(tqdm(self.file_list)))
@@ -988,17 +988,17 @@ class AggregateData:
         self.signal_models = signal_models
         
 
-    def process_file(self,file_path,diagonalize_qpd=False,signal_model=None,p0_bead=None,mass_bead=0,\
-                     harms=[],max_freq=500.,downsample=True,wiener=[False,True,False,False,False],\
+    def process_file(self,file_path,diagonalize_qpd=False,signal_model=None,ml_model=None,p0_bead=None,\
+                     mass_bead=0,harms=[],max_freq=500.,downsample=True,wiener=[False,True,False,False,False],\
                      no_tf=False,lightweight=True):
         '''
         Process data for an individual file and return the FileData object
         '''
         this_file = FileData(file_path)
         try:
-            this_file.load_data(diagonalize_qpd=diagonalize_qpd,signal_model=signal_model,p0_bead=p0_bead,\
-                                mass_bead=mass_bead,harms=harms,downsample=downsample,wiener=wiener,max_freq=max_freq,\
-                                no_tf=no_tf,lightweight=lightweight)
+            this_file.load_data(diagonalize_qpd=diagonalize_qpd,signal_model=signal_model,ml_model=ml_model,\
+                                p0_bead=p0_bead,mass_bead=mass_bead,harms=harms,downsample=downsample,wiener=wiener,\
+                                max_freq=max_freq,no_tf=no_tf,lightweight=lightweight)
         except Exception as e:
             this_file.is_bad = True
             this_file.error_log = repr(e)
