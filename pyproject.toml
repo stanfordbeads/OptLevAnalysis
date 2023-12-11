@@ -1,7 +1,7 @@
 [project]
 name = "optlevanalysis"
 description = "Analysis code for the Stanford optical levitation lab."
-dynamic = ["version"]
+dynamic = ["version","dependencies"]
 
 [build-system]
 requires = ["setuptools >= 61.0.0","setuptools-git-versioning"]
@@ -12,3 +12,6 @@ where = ["lib"]
 
 [tool.setuptools-git-versioning]
 enabled = true
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
