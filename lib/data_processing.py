@@ -126,17 +126,7 @@ class FileData:
             self.make_templates(signal_model,p0_bead,mass_bead=mass_bead)
         # for use with AggregateData, don't carry around all the raw data
         if lightweight:
-            self.data_dict = {}
-            self.laser_power_full = np.array(())
-            self.p_trans_full = np.array(())
-            self.cant_raw_data = np.array(((),(),()))
-            self.quad_raw_data = np.array(((),(),()))
-            self.pspd_raw_data = np.array(((),(),()))
-            self.quad_amps = np.array(((),(),(),(),()))
-            self.quad_phases = np.array(((),(),(),(),()))
-            self.cant_pos_calibrated = np.array(((),(),()))
-            self.qpd_force_calibrated = np.array(((),(),()))
-            self.pspd_force_calibrated = np.array(((),(),()))
+            self.drop_raw_data()
 
 
     def read_hdf5(self):
@@ -172,6 +162,23 @@ class FileData:
             dd['bead_height'] = f.attrs['bead_height']
 
         self.data_dict = dd
+
+
+    def drop_raw_data(self):
+        '''
+        Drop raw data that will not be used by the AggregateData class.
+        '''
+        self.data_dict = {}
+        self.laser_power_full = np.array(())
+        self.p_trans_full = np.array(())
+        self.cant_raw_data = np.array(((),(),()))
+        self.quad_raw_data = np.array(((),(),()))
+        self.pspd_raw_data = np.array(((),(),()))
+        self.quad_amps = np.array(((),(),(),(),()))
+        self.quad_phases = np.array(((),(),(),(),()))
+        self.cant_pos_calibrated = np.array(((),(),()))
+        self.qpd_force_calibrated = np.array(((),(),()))
+        self.pspd_force_calibrated = np.array(((),(),()))
 
     
     def get_laser_power(self):
@@ -231,6 +238,8 @@ class FileData:
             # if it is close to the timestamp from the hdf5 file metadata, we've found the first timestamp
             if(abs(ts_attempt - timestamp_ns) < diff_thresh):
                 tind = ind
+                if tind<10:
+                    tind += 12
                 break
 
         # now get the full array of timestamps
@@ -813,6 +822,9 @@ class FileData:
             forces.append(signal_model.get_force_at_pos(positions,[ind]))
         forces = np.array(forces)*mass_fac
 
+        # detrend the force data before windowing
+        forces = forces - np.mean(forces,axis=1,keepdims=True)
+
         # apply the same window to the force data as the quad data
         forces = forces*self.window[None,:,None]
 
@@ -992,7 +1004,7 @@ class AggregateData:
                      mass_bead=0,harms=[],max_freq=500.,downsample=True,wiener=[False,True,False,False,False],\
                      no_tf=False,lightweight=True):
         '''
-        Process data for an individual file and return the FileData object
+        Process data for an individual file and return the FileData object.
         '''
         this_file = FileData(file_path)
         try:
@@ -1575,7 +1587,7 @@ class AggregateData:
             ax[1].set_yticks([-180,0,180])
             ax[0].legend()
             ax[0].grid(which='both')
-            ax[1].legend()
+            ax[1].legend(ncol=2)
             ax[1].grid(which='both')
 
         # bins on each side to average over for smoothing
@@ -1609,7 +1621,7 @@ class AggregateData:
         diag_mat = np.matmul(scale_mat,diag_unscaled)
 
         if plot:
-            cross_coupling(self.agg_dict,diag_mat,p_x=p_x,p_y=p_y,plot_inds=fit_inds)
+            cross_coupling(self.agg_dict,diag_mat,p_x=p_x,p_y=p_y,plot_inds=fit_inds,plot_null=True)
             xy_on_qpd(diag_mat)
 
         if np.prod(np.sign(diag_mat[:,:2]))!=-1:

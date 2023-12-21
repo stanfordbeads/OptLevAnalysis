@@ -157,7 +157,7 @@ def xy_on_qpd(qpd_diag_mat):
     return fig,axs
 
 
-def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None):
+def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None,plot_null=False):
     '''
     Plot the cross-coupling before and after diagonalization.
     '''
@@ -205,18 +205,25 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None):
     fig,ax = plt.subplots()
     ax.semilogy(freqs,asd_x_raw,label='Naive $x$',color=colors[0],alpha=0.5)
     ax.semilogy(freqs,asd_y_raw,label='Naive $y$',color=colors[1],alpha=0.5)
-    ax.semilogy(freqs,asd_x_corr,label='Diag. $x$',color=colors[0],ls=':',lw=2)
-    ax.semilogy(freqs,asd_y_corr,label='Diag. $y$',color=colors[1],ls=':',lw=2)
+    if plot_null:
+        null_naive = np.array(((1.,-1.,-1.,1.),\
+                               (1.,1.,1.,1.)))
+        null_raw = np.einsum('ij,jkl->ikl',null_naive,signal_mat)[0,:,:]
+        asd_null_raw = np.sqrt(np.mean(np.abs(np.fft.rfft(null_raw)*fft_to_asd)**2,axis=0))[:len(freqs)]
+    ax.semilogy(freqs,asd_x_corr,label='Diag. $x$',color=colors[0],lw=1)
+    ax.semilogy(freqs,asd_y_corr,label='Diag. $y$',color=colors[1],lw=1)
     if (p_x is not None) and (p_y is not None):
         ax.semilogy(freqs,lor(freqs,*p_x),label='Peak fit $x$',color=colors[2])
         ax.semilogy(freqs,lor(freqs,*p_y),label='Peak fit $y$',color=colors[3])
+    if plot_null:
+        ax.semilogy(freqs,asd_null_raw,label='Null',color=colors[4],alpha=0.5)
     ax.set_xlim([280,420])
     ax.set_ylim([1e-2,1e2])
     ax.set_xlabel('Frequency [Hz]')
     ax.set_ylabel('ASD [1/$\sqrt{\mathrm{Hz}}$]')
     ax.set_title('QPD Diagonalization')
     ax.grid(which='both')
-    ax.legend()
+    ax.legend(ncol=3+plot_null*1)
 
     return fig,ax
 

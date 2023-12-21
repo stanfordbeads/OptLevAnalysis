@@ -64,7 +64,7 @@ def fit_alpha_for_file(agg_dict,file_index,sensor='qpd',use_ml=False):
 
                 # maximum likelihood estimate for alpha
                 alpha_mle = -NLL_b/(2.*NLL_a)
-                
+
                 likelihood_coeffs[harm,axis,lambda_ind,:] = np.array((NLL_a,NLL_b,NLL_c,alpha_mle))
 
     return likelihood_coeffs
@@ -168,7 +168,7 @@ def get_limit_analytic(likelihood_coeffs,confidence_level=0.95,alpha_sign=1):
 
 def get_limit_from_likelihoods(likelihood_coeffs,confidence_level=0.95,alpha_sign=1):
     '''
-    Get an upper limit on alpha for an array of lambdas given the coefficients
+    Get an upper limit on alpha at a single lambda given the coefficients
     of the quadratic negative log likleihood function. If multiple sets of likelihood
     coefficients are given, a test statistic is computed for each independently and the
     limit is computed from the sum of test statistics.
@@ -182,6 +182,11 @@ def get_limit_from_likelihoods(likelihood_coeffs,confidence_level=0.95,alpha_sig
     # computed for each and summed, or only a single likelihood function
     if len(likelihood_coeffs.shape)==1:
         likelihood_coeffs = likelihood_coeffs[np.newaxis,:]
+
+    # only valid for cases where alpha_hat is the same sign as alpha_sign
+    likelihood_coeffs = likelihood_coeffs[likelihood_coeffs[...,-1]*alpha_sign > 0]
+    if len(likelihood_coeffs)==0:
+        return np.nan
 
     # function to be minimized
     limit_func = lambda alpha : np.sum([test_stat_func(alpha,likelihood_coeffs[i,:]) \
