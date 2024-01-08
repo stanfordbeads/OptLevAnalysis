@@ -1,6 +1,8 @@
 import numpy as np
 from scipy.optimize import minimize
 from scipy.stats import chi2,norm
+from joblib import Parallel, delayed
+from tqdm import tqdm
 from funcs import *
 
 # ************************************************************************ #
@@ -8,7 +10,7 @@ from funcs import *
 # AggregateData objects.
 # ************************************************************************ #
 
-def fit_alpha_all_files(agg_dict,file_indices=None,sensor='qpd',use_ml=False):
+def fit_alpha_all_files(agg_dict,file_indices=None,sensor='qpd',use_ml=False,num_cores=1):
     '''
     Find the best fit alpha to a dataset. Most of this should eventually be moved to
     stats.py so that different likelihood functions can be called from here.
@@ -16,10 +18,11 @@ def fit_alpha_all_files(agg_dict,file_indices=None,sensor='qpd',use_ml=False):
 
     if file_indices is None:
         file_indices = np.array(range(agg_dict['times'].shape[0]))
-    
-    likelihood_coeffs = []
-    for i in file_indices:
-        likelihood_coeffs.append(fit_alpha_for_file(agg_dict,i,sensor,use_ml=use_ml))
+
+    print('Computing the likelihood functions for the specified files...')
+    likelihood_coeffs = Parallel(n_jobs=num_cores)(delayed(fit_alpha_for_file)\
+                                                   (agg_dict,ind,sensor,use_ml)\
+                                                    for i,ind in enumerate(tqdm(file_indices)))
 
     return np.array(likelihood_coeffs)
 
@@ -70,39 +73,43 @@ def fit_alpha_for_file(agg_dict,file_index,sensor='qpd',use_ml=False):
     return likelihood_coeffs
 
 
-def combine_likelihoods_by_harm(likelihood_coeffs):
+def combine_likelihoods_over_dim(likelihood_coeffs,which='file'):
     '''
-    Combine all likelihoods for individual files into likelihoods for
-    each harmonic. Returns an array containing likelihoods for each
-    harmonic for each axis.
+    Combine likelihoods along a given dimensions. Likelihoods can be combined over
+    files, axes, or harmonics. Corresponding arguments are 'file', 'axis', and 'harm'.
+    Returns an array with dimension reduced by 1.
     '''
+
+    # choose the axis to sum over based on the input argument
+    axis = 999
+    if which=='file':
+        axis = len(likelihood_coeffs.shape)-5
+    elif which=='harm':
+        axis = len(likelihood_coeffs.shape)-4
+    elif which=='axis':
+        axis = len(likelihood_coeffs.shape)-3
+    if axis<0:
+        axis = 0
+
+    # check to ensure that the input arguments make sense
+    if axis==999:
+        raise Exception('Error: argument not recognized. Allowed arguments are '+\
+                        '"file", "axis", and "harm".')
+    elif len(likelihood_coeffs.shape)+axis<0:
+        raise Exception('Error: input likelihood coefficients are too low-dimensional!')
 
     # for quadratic log-likelihoods, just add coefficients and calculate
     # minimum analytically
-    coeffs_by_harm = np.sum(likelihood_coeffs,axis=0)
-    coeffs_by_harm[:,:,:,-1] = -coeffs_by_harm[:,:,:,1]/(2.*coeffs_by_harm[:,:,:,0])
-    return coeffs_by_harm
-    
-
-def combine_likelihoods_by_axis(likelihood_coeffs):
-    '''
-    Comine all likelihoods for individual harmonics into likelihoods for
-    each axis. Returns an array containing combined likelihoods for each axis.
-    Note that this is NOT how the sensitivity was calculated in the 2021 PRD.
-    '''
-
-    # for quadratic log-likelihoods, just add coefficients and calculate
-    # minimum analytically
-    coeffs_by_harm = np.sum(likelihood_coeffs,axis=0)
-    coeffs_by_harm[:,:,-1] = -coeffs_by_harm[:,:,1]/(2.*coeffs_by_harm[:,:,0])
-    return coeffs_by_harm
+    coeffs = np.sum(likelihood_coeffs,axis=axis)
+    coeffs[...,-1] = -coeffs[...,1]/(2.*coeffs[...,0])
+    return coeffs
 
 
 def group_likelihoods_by_test(likelihood_coeffs,axis=None):
     '''
     Returns an array of likelihood functions, each of which will independently be used
     to calculate a test statistic. A limit can then be calculated using the sum of the
-    resulting test statistics.
+    resulting test statistics. This is designed based on the 2021 PRD.
     '''
 
     # final array should have shape (harmonic, lambda, NLL coefficients)
@@ -110,7 +117,7 @@ def group_likelihoods_by_test(likelihood_coeffs,axis=None):
         likelihood_coeffs = likelihood_coeffs.reshape((int(likelihood_coeffs.shape[0]*likelihood_coeffs.shape[1]),\
                                                        likelihood_coeffs.shape[2],likelihood_coeffs.shape[3]))
     else:
-        likelihood_coeffs = likelihood_coeffs[axis,:,:,:]
+        likelihood_coeffs = likelihood_coeffs[:,axis,:,:]
     
     return likelihood_coeffs
 
@@ -122,12 +129,13 @@ def test_stat_func(alpha,likelihood_coeffs,discovery=False):
     the sign of the input.
     '''
 
-    # determine if we're setting a limit for positive or negative alpha
-    signs = np.sign(alpha)
-    alpha_hat = likelihood_coeffs[-1]
+    # only set a limit on one sign of alpha at a time
+    if not all((np.sign(alpha)-np.sign(alpha)[0])==0):
+        raise Exception('Error: alphas must all be the same sign!')
 
-    # only keep likelihood terms with alpha hat of the correct sign
-    if np.all(signs*alpha_hat<0):
+    # if alpha is not the same sign as alpha-hat, return zeros
+    alpha_hat = likelihood_coeffs[-1]
+    if np.sign(alpha[0])!=np.sign(alpha_hat):
         return np.zeros_like(alpha)
     
     # definition of the test statistic
@@ -287,3 +295,42 @@ def get_alpha_vs_lambda(likelihood_coeffs,lambdas,discovery=False,\
         pos_disc[disc>0] = disc[disc>0]
         neg_disc[disc<0] = np.abs(disc[disc<0])
         return pos_disc,neg_disc
+
+
+def get_test_stat_dist(likelihood_coeffs,alpha,lamb_ind,num_samples=100,files_per_sample=100,\
+                       num_cores=1,mode='prd'):
+    '''
+    Returns an array of test statistics computed with synthetic datasets. Intended to be used
+    to examine the asymptotic behavior of the test statistic for accurate limit setting.
+    '''
+
+    sub_inds = np.random.randint(0,files_per_sample,(num_samples,likelihood_coeffs.shape[0]))
+
+    print('Computing the test statistic for {} random subsets of {} files...'\
+          .format(num_samples,files_per_sample))
+    
+    test_stats = Parallel(n_jobs=num_cores)(delayed(compute_test_stat)\
+                                                    (likelihood_coeffs[sub_inds[i,...]],np.array([alpha]),lamb_ind,mode)\
+                                                     for i in tqdm(range(sub_inds.shape[0])))
+    
+    return np.array(test_stats)[:,0]
+
+
+def compute_test_stat(likelihood_coeffs,alpha,lamb_ind,mode='prd'):
+    '''
+    Compute the test stastistic for a single batch of files for an array of alpha values.
+    This uses the test statistic construction from the 2021 PRD.
+    '''
+
+    likelihood_coeffs = combine_likelihoods_over_dim(likelihood_coeffs,which='file')
+    if mode=='sum':
+        likelihood_coeffs = combine_likelihoods_over_dim(likelihood_coeffs,which='axis')
+        likelihood_coeffs = combine_likelihoods_over_dim(likelihood_coeffs,which='harm')
+        test_stat = test_stat_func(alpha,likelihood_coeffs[lamb_ind,:])
+    elif mode=='prd':
+        likelihood_coeffs = group_likelihoods_by_test(likelihood_coeffs)
+        test_stat = np.sum([test_stat_func(alpha,likelihood_coeffs[j,lamb_ind,:]) \
+                            for j in range(likelihood_coeffs.shape[0])],axis=0)
+    else:
+        raise Exception('Error: mode input not recognized!')
+    return test_stat

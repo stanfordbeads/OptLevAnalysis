@@ -715,7 +715,7 @@ def alpha_limit(agg_dict,descrip=None,sensor='qpd'):
 
     # compute the limit for this dataset
     likelihood_coeffs = fit_alpha_all_files(agg_dict,sensor=sensor)
-    likelihood_coeffs = combine_likelihoods_by_harm(likelihood_coeffs)
+    likelihood_coeffs = combine_likelihoods_over_dim(likelihood_coeffs,which='file')
     lambdas = agg_dict['template_params'][0]
     likelihood_coeffs_all = group_likelihoods_by_test(likelihood_coeffs)
     limit_pos,limit_neg = get_alpha_vs_lambda(likelihood_coeffs_all,lambdas)
