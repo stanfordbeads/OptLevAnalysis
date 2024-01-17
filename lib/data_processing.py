@@ -490,6 +490,7 @@ class FileData:
             self.force_cal_factors_pspd = force_cal_factors
 
         # calculate the DFT of the data, then correct using the transfer function matrix
+        data_fft = raw_data - np.mean(raw_data,axis=1,keepdims=True)
         data_fft = np.fft.rfft(raw_data)[:,:len(self.freqs)]
         # matrix multiplication with index contraction made explicit
         # 'kj,ki' = matrix multiplication along second two indices (the 3x3 part)
@@ -963,6 +964,11 @@ class AggregateData:
         self.file_data_objs = file_data_objs
         self.bad_files = np.array(bad_files)
         self.error_logs = np.array(error_logs)
+        # edit the number of files per directory to account for bad files
+        for i in range(len(self.bad_files)):
+            root_dir = '/'.join(self.bad_files[i].split('/')[:-1])
+            dir_ind = np.argwhere(root_dir==self.data_dirs)[0][0]
+            self.num_files[dir_ind] -= 1
         # delete the reference to the data or else the data will all be kept in memory
         # later after being copied to the dictionary as numpy arrays. this is
         # necessary to avoid memory errors when loading large AggregateData objects
