@@ -839,7 +839,8 @@ class FileData:
 
 class AggregateData:
 
-    def __init__(self,data_dirs=[],file_prefixes=[],descrips=[],num_to_load=1e6,first_index=0):
+    def __init__(self,data_dirs=[],file_prefixes=[],descrips=[],num_to_load=1e6,\
+                 first_index=0,configs=None):
         '''
         Takes a list of directories containing the files to be aggregated, and optionally
         a list of file prefixes. If given, the list of file prefixes should be the same length as
@@ -867,6 +868,12 @@ class AggregateData:
         else:
             if len(num_to_load) != len(data_dirs):
                 raise Exception('Error: length of data_dirs and num_to_load do not match.')
+        if type(configs) is not list:
+            configs = [configs]*len(data_dirs)
+        else:
+            if len(configs) != len(data_dirs):
+                raise Exception('Error: length of data_dirs and configs do not match. ')
+        self.configs = configs
         # anything added here should be properly handled in merge_objects() and load_from_hdf5()
         self.num_to_load = np.array(num_to_load)
         self.num_files = np.array([])
@@ -901,14 +908,19 @@ class AggregateData:
         for i,dir in enumerate(self.data_dirs):
             # get the bead position wrt the stage for each directory
             if not no_config:
-                try:
-                    with open(dir+'/config.yaml','r') as infile:
-                        config = yaml.safe_load(infile)
-                        p0_bead.append(config['p0_bead'])
-                        diam_bead.append(config['diam_bead'])
-                        mass_bead.append(config['mass_bead'])
-                except FileNotFoundError:
-                    raise Exception('Error: config file not found in directory.')
+                if self.configs is None:
+                    try:
+                        with open(dir+'/config.yaml','r') as infile:
+                            config = yaml.safe_load(infile)
+                            p0_bead.append(config['p0_bead'])
+                            diam_bead.append(config['diam_bead'])
+                            mass_bead.append(config['mass_bead'])
+                    except FileNotFoundError:
+                        raise Exception('Error: config file not found in directory.')
+                else:
+                    p0_bead.append(self.configs[i]['p0_bead'])
+                    diam_bead.append(self.configs[i]['diam_bead'])
+                    mass_bead.append(self.configs[i]['mass_bead'])
             else:
                 p0_bead.append([0,0,0])
                 diam_bead.append(0)
@@ -987,7 +999,7 @@ class AggregateData:
         self.lightweight = lightweight
 
 
-    def load_yukawa_model(self,lambda_range=[1e-6,1e-5],num_lambdas=None):
+    def load_yukawa_model(self,lambda_range=[1e-6,1e-4],num_lambdas=None):
         '''
         Load functions used to make Yukawa-modified gravity templates
         '''
