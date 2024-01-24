@@ -99,13 +99,15 @@ class BackgroundData:
         return inds
 
 
-    def load_aggregate_data(self,num_to_load=100,**kwargs):
+    def load_aggregate_data(self,num_to_load=100,load_templates=False,configs=None,**kwargs):
         '''
         Load the background data in an AggregateData object.
         '''
         bkgdat = AggregateData(self.background_dict['Directory name'][self.inds],file_prefixes='',\
-                               descrips=self.descrips,num_to_load=num_to_load)
-        bkgdat.load_file_data(**kwargs)
+                               descrips=self.descrips,num_to_load=num_to_load,configs=configs)
+        if load_templates:
+            bkgdat.load_yukawa_model(num_lambdas=25)
+        bkgdat.load_file_data(**kwargs,load_templates=load_templates)
         return bkgdat
 
 
@@ -225,8 +227,3 @@ def prom_func(ffts,sidebands):
     std_prom = (prom/2.)*np.sqrt((std_num/num)**2 + (std_denom/denom)**2)
     return prom,std_prom
 
-        
-
-
-
-        
