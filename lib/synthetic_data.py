@@ -24,7 +24,7 @@ class SynthFile(FileData):
 
         # add synthetic cantilever motion to the noise data so we get a non-trivial signal model
         if noise_only:
-            cant_y = 90.*np.sin(2.*np.pi*3.*np.linspace(0,10,self.nsamp))
+            cant_y = 85.*np.sin(2.*np.pi*3.*np.linspace(0,10,self.nsamp))
             self.cant_pos_calibrated = self.cant_pos_calibrated + np.array((np.zeros_like(cant_y),cant_y,np.zeros_like(cant_y)))
 
         # make the synthetic signal using the modified cantilever data and the given alpha and lambda
