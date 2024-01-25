@@ -440,11 +440,10 @@ class FileData:
             motion_likeness_x = np.ones_like(amps[0])
             motion_likeness_y = np.ones_like(amps[0])
         else:
-            motion_likeness_x,motion_likeness_y = ml_model(amps)
+            motion_likeness_x,motion_likeness_y = ml_model(amps,self.good_inds)
 
         # set object attribute with a numpy array of x and y
-        self.motion_likeness = np.array([motion_likeness_x[:len(self.freqs)],\
-                                         motion_likeness_y[:len(self.freqs)]])
+        self.motion_likeness = np.array([motion_likeness_x,motion_likeness_y])
 
 
     def calibrate_bead_response(self,tf_path=None,sensor='QPD',cal_drive_freq=71.0,\
@@ -868,11 +867,12 @@ class AggregateData:
         else:
             if len(num_to_load) != len(data_dirs):
                 raise Exception('Error: length of data_dirs and num_to_load do not match.')
-        if type(configs) is not list:
-            configs = [configs]*len(data_dirs)
-        else:
-            if len(configs) != len(data_dirs):
-                raise Exception('Error: length of data_dirs and configs do not match. ')
+        if configs is not None:
+            if type(configs) is not list:
+                configs = [configs]*len(data_dirs)
+            else:
+                if len(configs) != len(data_dirs):
+                    raise Exception('Error: length of data_dirs and configs do not match. ')
         self.configs = configs
         # anything added here should be properly handled in merge_objects() and load_from_hdf5()
         self.num_to_load = np.array(num_to_load)
