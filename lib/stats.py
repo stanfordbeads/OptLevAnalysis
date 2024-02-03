@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.optimize import minimize
+from scipy.optimize import minimize,root_scalar,brentq,newton,differential_evolution
 from scipy.stats import chi2,norm
 from joblib import Parallel, delayed
 from tqdm import tqdm
@@ -10,7 +10,7 @@ from funcs import *
 # AggregateData objects.
 # ************************************************************************ #
 
-def fit_alpha_all_files(agg_dict,file_indices=None,sensor='qpd',use_ml=False,num_cores=1):
+def fit_alpha_all_files(agg_dict,file_indices=None,sensor='qpd',use_ml=False,ml_veto=False,num_cores=1):
     '''
     Find the best fit alpha to a dataset. Most of this should eventually be moved to
     stats.py so that different likelihood functions can be called from here.
@@ -21,13 +21,13 @@ def fit_alpha_all_files(agg_dict,file_indices=None,sensor='qpd',use_ml=False,num
 
     print('Computing the likelihood functions for the specified files...')
     likelihood_coeffs = Parallel(n_jobs=num_cores)(delayed(fit_alpha_for_file)\
-                                                   (agg_dict,ind,sensor,use_ml)\
+                                                   (agg_dict,ind,sensor,use_ml,ml_veto)\
                                                     for i,ind in enumerate(tqdm(file_indices)))
 
     return np.array(likelihood_coeffs)
 
 
-def fit_alpha_for_file(agg_dict,file_index,sensor='qpd',use_ml=False):
+def fit_alpha_for_file(agg_dict,file_index,sensor='qpd',use_ml=False,ml_veto=False):
     '''
     Find the best fit alpha for a single file and return it. This function will be
     called in parallel so that all files can be processed to produce a limit.
@@ -39,7 +39,7 @@ def fit_alpha_for_file(agg_dict,file_index,sensor='qpd',use_ml=False):
     bead_sb_ffts = agg_dict[sensor+'_sb_ffts'][file_index]
     num_sb = int(bead_sb_ffts.shape[1]/bead_ffts.shape[1])
     good_inds = agg_dict['good_inds']
-    mot_likes = agg_dict['mot_likes'][file_index][:,good_inds]
+    mot_likes = agg_dict['mot_likes'][file_index]
     likelihood_coeffs = np.zeros((len(good_inds),3,len(lambdas),4),dtype=np.float128)
     
     for harm,_ in enumerate(good_inds):
@@ -48,14 +48,19 @@ def fit_alpha_for_file(agg_dict,file_index,sensor='qpd',use_ml=False):
             sb_fft_array = bead_sb_ffts[axis,harm*num_sb:(harm+1)*num_sb]
             data = bead_ffts[axis,harm]
             if use_ml and axis!=2:
-                ml = mot_likes[axis,harm]
-                noise = np.mean(np.abs(sb_fft_array)**2)
-                data = np.sqrt(ml*max(0,np.abs(data)**2-noise) + noise)*np.exp(1j*np.angle(data))
+                if not ml_veto:
+                    ml = mot_likes[axis,harm]
+                    noise = np.mean(np.abs(sb_fft_array)**2)
+                    data = np.sqrt(ml*max(0,np.abs(data)**2-noise) + noise)*np.exp(1j*np.angle(data))
             data_real = np.real(data)
             data_imag = np.imag(data)
             var = (1./(2.*num_sb))*np.sum(np.real(sb_fft_array)**2+np.imag(sb_fft_array)**2)
 
             for lambda_ind,_ in enumerate(lambdas):
+                if use_ml and axis!=2:
+                    if ml_veto and mot_likes[axis,harm]<0.5:
+                        likelihood_coeffs[harm,axis,lambda_ind,:] = np.array((1e-64,0,0,0))
+                        continue
                 
                 model_real = np.real(yuk_ffts[lambda_ind,axis,harm])
                 model_imag = np.imag(yuk_ffts[lambda_ind,axis,harm])
@@ -183,8 +188,6 @@ def get_limit_from_likelihoods(likelihood_coeffs,confidence_level=0.95,alpha_sig
     '''
     # critical value of the test statistic ASSUMING WILKS'S THEOREM HOLDS
     con_val = chi2(1).ppf(confidence_level)*0.5
-    # first approx of true test stat asymptotic behavior
-    con_val = 10.
 
     # can either pass an array of likelihood functions, in which case test statistics will be
     # computed for each and summed, or only a single likelihood function
@@ -241,7 +244,6 @@ def get_discovery_from_likelihoods(likelihood_coeffs,z_discovery=3):
     false discovery will be made if individual harmonics show background-like measurements.
     '''
     # critical value of the test statistic ASSUMING WILKS'S THEOREM HOLDS
-    # ***** CHECK IF FACTOR 2 IS REQUIRED HERE *****
     confidence_level = norm.cdf(z_discovery)
     con_val = chi2(1).ppf(confidence_level)
 
@@ -274,10 +276,10 @@ def get_alpha_vs_lambda(likelihood_coeffs,lambdas,discovery=False,\
         pos_limit = []
         neg_limit = []
         for i in range(len(lambdas)):
-            pos_limit.append(get_limit_from_likelihoods(likelihood_coeffs[:,i,:],\
+            pos_limit.append(get_limit_from_likelihoods(likelihood_coeffs[...,i,:],\
                                                         confidence_level=confidence_level,\
                                                         alpha_sign=1))
-            neg_limit.append(get_limit_from_likelihoods(likelihood_coeffs[:,i,:],\
+            neg_limit.append(get_limit_from_likelihoods(likelihood_coeffs[...,i,:],\
                                                         confidence_level=confidence_level,\
                                                         alpha_sign=-1))
         pos_limit = np.array(pos_limit)
@@ -334,3 +336,228 @@ def compute_test_stat(likelihood_coeffs,alpha,lamb_ind,mode='prd'):
     else:
         raise Exception('Error: mode input not recognized!')
     return test_stat
+
+
+def get_alpha_scale(likelihood_coeffs,lambdas):
+    '''
+    Compute the RMS alpha for the dataset over all harmonics. Used as a comparison
+    point for background levels between datasets.
+    '''
+    if len(likelihood_coeffs.shape)>4:
+        likelihood_coeffs = combine_likelihoods_over_dim(likelihood_coeffs,which='file')
+    ten_um_ind = np.argmin(np.abs(lambdas - 1e-5))
+    alpha_hats = likelihood_coeffs[:,:,ten_um_ind,-1]
+    median = np.median(np.log10(np.abs(alpha_hats[~np.isnan(alpha_hats)])))
+    lower_1s = np.quantile(np.log10(np.abs(alpha_hats[~np.isnan(alpha_hats)])),0.16)
+    upper_1s = np.quantile(np.log10(np.abs(alpha_hats[~np.isnan(alpha_hats)])),0.84)
+
+    return 10**np.array((median,lower_1s,upper_1s))
+
+
+def nll_with_background(x,agg_dict,file_inds=None,delta_means=[0.1,0.1],lamb=1e-5,alpha=None):
+    '''
+    Implementation of the negative log-likelihood function including both the signal
+    model and an in-situ background measurement on some additional data stream.
+    '''
+
+    # can minimize the conditional or unconditional NLL depending on whether an alpha is passed
+    if alpha is None:
+        # alpha,beta,gamma_x,gamma_y = x
+        alpha = x[0]
+        beta = x[1:-2]
+        gamma_x = x[-2]
+        gamma_y = x[-1]
+    else:
+        # beta,gamma_x,gamma_y = x
+        beta = x[:-2]
+        gamma_x = x[-2]
+        gamma_y = x[-1]
+
+    if file_inds is None:
+        file_inds = np.array(range(agg_dict['times'].shape[0]))
+
+    if len(beta)>1:
+        beta = beta.reshape(2,-1)[np.newaxis,:,:]
+    else:
+        beta = beta[0]
+    gammas = np.array([gamma_x,gamma_y])[np.newaxis,:,np.newaxis]
+    deltas = np.array(delta_means)[np.newaxis,:,np.newaxis]
+
+    # work with a single value of lambda
+    lambdas = agg_dict['template_params'][0]
+    lambda_ind = np.argmin(np.abs(lambdas-lamb))
+    
+    # extract the data for these datasets
+    yuk_ffts = agg_dict['template_ffts'][file_inds,lambda_ind,...]
+    qpd_ffts = agg_dict['qpd_ffts'][file_inds]
+    qpd_sb_ffts = agg_dict['qpd_sb_ffts'][file_inds]
+    num_sb = int(qpd_sb_ffts.shape[2]/qpd_ffts.shape[2])
+
+    # initialize the negative log likelihood
+    nll_array = np.zeros_like(qpd_ffts[:,:2,:])
+
+    # get the background measurements
+    background = qpd_ffts[:,3,np.newaxis,:]
+    background_real = np.real(background)
+    background_imag = np.imag(background)
+    background_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,3,np.newaxis,...]
+    background_var = (1./(2.*num_sb))*np.sum(np.real(background_sb_ffts)**2+np.imag(background_sb_ffts)**2,axis=-1)
+
+    # get the measurements for each file/axis/harm
+    data = qpd_ffts[:,:2,:]
+    data_real = np.real(data)
+    data_imag = np.imag(data)
+    data_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,:2,...]
+    data_var = (1./(2.*num_sb))*np.sum(np.real(data_sb_ffts)**2+np.imag(data_sb_ffts)**2,axis=-1)
+
+    # get the templates for each file/axis/harm
+    signal_real = np.real(yuk_ffts[:,:2,:])
+    signal_imag = np.imag(yuk_ffts[:,:2,:])
+
+    # add to the total negative log likelihood
+    nll_array = (data_real - alpha*signal_real - beta*gammas*background_real)**2/data_var \
+                + (data_imag - alpha*signal_imag - beta*gammas*background_imag)**2/data_var \
+                + (background_real - beta*background_real - alpha*deltas*signal_real)**2/background_var \
+                + (background_imag - beta*background_imag - alpha*deltas*signal_imag)**2/background_var \
+
+    return np.sum(nll_array)
+
+
+def unconditional_mle(agg_dict,delta_means=[0.1,0.1],lamb=1e-5,single_beta=False):
+    '''
+    Maximize the likelihood function over both the signal and background
+    parameters. Returns the unconditional maximum likelihood estimates for
+    alpha and beta.
+    '''
+    num_betas = 1
+    if single_beta==False:
+        num_betas = 2*(np.shape(agg_dict['qpd_ffts'])[-1])
+    beta_bounds = ((0,2) for i in range(num_betas))
+    result = minimize(nll_with_background,[1e10]+[1]*num_betas+[1,1],\
+                      args=(agg_dict,None,delta_means,lamb),\
+                      bounds=((-1e16,1e16),*beta_bounds,(-1e3,1e3),(-1e3,1e3)),\
+                      tol=1e0,options={'maxfev':50000},method='Nelder-Mead')
+    if result.success==False:
+        print('Minimization failed!')
+    return result
+    
+
+def conditional_mle(agg_dict,delta_means=[0.1,0.1],lamb=1e-5,alpha=1e8,single_beta=False):
+    '''
+    Maximize the likelihood function over both the background only.
+    Returns the conditional maximum likelihood estimate for beta.
+    '''
+    num_betas = 1
+    if single_beta==False:
+        num_betas = 2*(np.shape(agg_dict['qpd_ffts'])[-1])
+    beta_bounds = ((0,2) for i in range(num_betas))
+    result = minimize(nll_with_background,[1]*num_betas+[1,1],\
+                      args=(agg_dict,None,delta_means,lamb,alpha),\
+                      bounds=(*beta_bounds,(-1e3,1e3),(-1e3,1e3)),\
+                      tol=1e0,options={'maxfev':5000},method='Nelder-Mead')
+    if result.success==False:
+        print('Minimization failed!')
+    return result
+
+
+def q_with_background(alpha,alpha_hat,uncond_nll,agg_dict,delta_means=[0.1,0.1],\
+                      lamb=1e-5,single_beta=False):
+    '''
+    Function to compute the profile likelihood ratio test statistic for an exclusion
+    for a given value of alpha.
+    '''
+    cond_res = conditional_mle(agg_dict,delta_means=delta_means,lamb=lamb,\
+                               alpha=alpha,single_beta=single_beta)
+    cond_nll = cond_res.fun
+
+    if np.abs(alpha)<np.abs(alpha_hat):
+        q_alpha = 0
+    else:
+        q_alpha = cond_nll - uncond_nll
+    
+    return q_alpha
+
+
+def q_discovery(uncond_nll,agg_dict,delta_means=[0.1,0.1],lamb=1e-5,single_beta=False):
+    '''
+    Function to compute the profile likelihood ratio test statistic for a discovery
+    for a given value of alpha.
+    '''
+    cond_res = conditional_mle(agg_dict,delta_means=delta_means,\
+                               lamb=lamb,alpha=0,single_beta=single_beta)
+    cond_nll = cond_res.fun
+    q_alpha = cond_nll - uncond_nll
+    
+    return q_alpha
+
+
+def z_discovery(uncond_nll,agg_dict,delta_means=[0.1,0.1],lamb=1e-5,single_beta=False):
+    '''
+    Return a z-score for a discovery.
+    '''
+    q_disc = q_discovery(uncond_nll,agg_dict,delta_means,lamb,single_beta)
+
+    return norm.ppf(chi2(1).cdf(q_disc))
+
+
+def plr_limit_func(alpha,alpha_hat,uncond_nll,agg_dict,delta_means=[0.1,0.1],\
+                   lamb=1e-5,cl=0.95,single_beta=False):
+    '''
+    This function's root occurs at the alpha value corresponding to an exclusion at
+    the specified confidence level.
+    '''
+    con_val = chi2(1).ppf(cl)*0.5
+    val = q_with_background(alpha,alpha_hat,uncond_nll,agg_dict,\
+                            delta_means=delta_means,lamb=lamb,single_beta=single_beta) - con_val
+    
+    return val
+
+
+def get_limit_with_background(agg_dict,delta_means=[0.1,0.1],lamb=1e-5,\
+                              cl=0.95,tol=1e-1,max_iters=3,single_beta=False):
+    '''
+    Find the value of alpha that is greater than 95 percent of the test statistic
+    distribution under the null hypothesis.
+    '''
+    uncond_res = unconditional_mle(agg_dict,delta_means=delta_means,lamb=lamb,single_beta=single_beta)
+    alpha_hat = uncond_res.x[0]
+    uncond_nll = uncond_res.fun
+    limit = plr_critical_value(alpha_hat,uncond_nll,agg_dict,delta_means,lamb,cl,tol,max_iters,single_beta)
+
+    return limit
+
+
+def plr_critical_value(alpha_hat,uncond_nll,agg_dict,delta_means,lamb,cl,\
+                       tol=1e-1,max_iters=3,single_beta=False):
+    '''
+    Custom root-finding function to get the value of alpha for a given confidence level.
+    '''
+    alpha_low = alpha_hat
+    alpha_high = 1.3*alpha_hat
+    func_val = 2*tol
+    iter = 0
+    while np.abs(func_val)>tol:
+        alpha = (alpha_low + alpha_high)/2.
+        func_val = plr_limit_func(alpha,alpha_hat,uncond_nll,agg_dict,\
+                                  delta_means,lamb,cl,single_beta)
+        if func_val<0:
+            alpha_low = alpha
+        else:
+            alpha_high = alpha
+        iter += 1
+        if iter>max_iters:
+            break
+
+    return alpha
+
+
+def get_alpha_vs_lambda_background(agg_dict,delta_means,cl=0.95,tol=1e-1,\
+                                   max_iters=3,single_beta=False):
+    '''
+    Get the 95% CL limit on alpha for the range of lambda values in agg_dict.
+    '''
+    lambdas = agg_dict['template_params'][0]
+    limit = Parallel(n_jobs=len(lambdas))(delayed(get_limit_with_background)\
+                                          (agg_dict,delta_means,lam,cl,tol,max_iters,single_beta)\
+                                          for lam in tqdm(lambdas))
+    return np.array(limit)
