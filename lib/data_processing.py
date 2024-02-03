@@ -7,7 +7,8 @@ import yaml
 import time
 import scipy.interpolate as interp
 import scipy.signal as sig
-from scipy.optimize import curve_fit, minimize
+from scipy.optimize import curve_fit
+from scipy.linalg import null_space
 from tqdm import tqdm
 from joblib import Parallel, delayed
 from itertools import product
@@ -85,11 +86,13 @@ class FileData:
         self.is_bad = False
         self.error_log = ''
         self.qpd_diag_mat = np.array(((1.,1.,-1.,-1.),\
-                                      (1.,-1.,1.,-1.)))
+                                      (1.,-1.,1.,-1.),\
+                                      (1.,-1.,-1.,1.),\
+                                      (1.,1.,1.,1.)))
 
 
     def load_data(self,tf_path=None,cal_drive_freq=71.0,max_freq=2500.,num_harmonics=10,\
-                  harms=[],width=0,noise_bins=10,diagonalize_qpd=False,downsample=True,\
+                  harms=[],width=0,noise_bins=10,qpd_diag_mat=None,downsample=True,\
                   wiener=[False,True,False,False,False],cant_drive_freq=3.0,signal_model=None,\
                   ml_model=None,p0_bead=None,mass_bead=0,lightweight=False,no_tf=False):
         '''
@@ -101,8 +104,8 @@ class FileData:
         self.accelerometer = self.data_dict['accelerometer']
         self.bead_height = self.data_dict['bead_height']
         self.get_laser_power()
-        if diagonalize_qpd:
-            self.get_diag_mat()
+        if qpd_diag_mat is not None:
+            self.qpd_diag_mat = qpd_diag_mat
         self.get_xyz_from_quad()
         self.pspd_raw_data = self.data_dict['pspd_data']
         self.cant_raw_data = self.data_dict['cant_data']
@@ -204,15 +207,15 @@ class FileData:
         self.mean_p_trans = np.mean(self.p_trans_full)
 
 
-    def get_diag_mat(self):
-        '''
-        Read the config.yaml in the directory where the file is saved to get the matrix
-        which diagonalizes the QPD position response.
-        '''
-        config_path = '/'.join(self.file_name.split('/')[:-1])+'/config.yaml'
-        with open(config_path,'r') as infile:
-            config = yaml.safe_load(infile)
-        self.qpd_diag_mat = np.array(config['qpd_diag_mat'])
+    # def get_diag_mat(self):
+    #     '''
+    #     Read the config.yaml in the directory where the file is saved to get the matrix
+    #     which diagonalizes the QPD position response.
+    #     '''
+    #     config_path = '/'.join(self.file_name.split('/')[:-1])+'/config.yaml'
+    #     with open(config_path,'r') as infile:
+    #         config = yaml.safe_load(infile)
+    #     self.qpd_diag_mat = np.array(config['qpd_diag_mat'])
     
 
     def extract_quad(self):
@@ -317,12 +320,15 @@ class FileData:
         xy_vec = np.matmul(self.qpd_diag_mat,amps[:4,:])
         x = xy_vec[0,:]
         y = xy_vec[1,:]
+        n = np.sqrt(xy_vec[2,:]**2 + xy_vec[3,:]**2)
 
         # total light to normalize by
         quad_sum = np.sum(amps[:4,:],axis=0)
 
         # set object attribute with a numpy array of x,y,z
-        self.quad_raw_data = np.array([x.astype(np.float64)/quad_sum,y.astype(np.float64)/quad_sum,phases[4]])
+        self.quad_raw_data = np.array([x.astype(np.float64)/quad_sum,y.astype(np.float64)/quad_sum,\
+                                       phases[4]])
+        self.quad_null = n.astype(np.float64)/quad_sum
 
 
     def filter_raw_data(self,wiener=[False,True,False,False,False]):
@@ -347,6 +353,7 @@ class FileData:
 
         # get arrays of the raw time series
         qpd_x,qpd_y,qpd_z = tuple(self.quad_raw_data)
+        qpd_n = self.quad_null
         pspd_x,pspd_y,_ = tuple(self.pspd_raw_data)
         accel = self.accelerometer
         cant_x,cant_y,cant_z = tuple(self.cant_raw_data)
@@ -355,6 +362,7 @@ class FileData:
         qpd_x -= np.mean(qpd_x)
         qpd_y -= np.mean(qpd_y)
         qpd_z -= np.mean(qpd_z)
+        qpd_n -= np.mean(qpd_n)
         pspd_x -= np.mean(pspd_x)
         pspd_y -= np.mean(pspd_y)
         accel -= np.mean(accel)
@@ -369,6 +377,7 @@ class FileData:
         qpd_x_lpf = sig.decimate(qpd_x, ds_factor, ftype=dlti_filter, zero_phase=True)
         qpd_y_lpf = sig.decimate(qpd_y, ds_factor, ftype=dlti_filter, zero_phase=True)
         qpd_z_lpf = sig.decimate(qpd_z, ds_factor, ftype=dlti_filter, zero_phase=True)
+        qpd_n_lpf = sig.decimate(qpd_n, ds_factor, ftype=dlti_filter, zero_phase=True)
         pspd_x_lpf = sig.decimate(pspd_x,ds_factor,ftype=dlti_filter, zero_phase=True)
         pspd_y_lpf = sig.decimate(pspd_y,ds_factor,ftype=dlti_filter, zero_phase=True)
         accel_lpf = sig.decimate(accel, ds_factor, ftype=dlti_filter, zero_phase=True)
@@ -406,12 +415,14 @@ class FileData:
         qpd_x_w *= win
         qpd_y_w *= win
         qpd_z_w *= win
+        qpd_n_w = qpd_n_lpf*win
         pspd_x_w *= win
         pspd_y_w *= win
         accel_lpf *= win
 
         # replace existing class attributes with filtered data
         self.quad_raw_data = np.array((qpd_x_w, qpd_y_w, qpd_z_w))
+        self.quad_null = qpd_n_w
         self.pspd_raw_data = np.array((pspd_x_w, pspd_y_w, qpd_z_w))
         self.accelerometer = accel_lpf
         self.cant_raw_data = np.array((cant_x_lpf,cant_y_lpf,cant_z_lpf))
@@ -484,6 +495,7 @@ class FileData:
         if sensor=='QPD':
             raw_data = self.quad_raw_data
             self.force_cal_factors_qpd = force_cal_factors
+            null_fft = np.fft.rfft(self.quad_null)[:len(self.freqs)]
         elif sensor=='PSPD':
             raw_data = self.pspd_raw_data
             self.force_cal_factors_pspd = force_cal_factors
@@ -509,6 +521,7 @@ class FileData:
         # set calibrated time series and ffts as class attributes
         if sensor=='QPD':
             self.qpd_force_calibrated = bead_force_cal
+            calibrated_fft = np.append(calibrated_fft,force_cal_factors[0]*null_fft[np.newaxis,:],axis=0)
             self.qpd_ffts_full = calibrated_fft*norm_factor
         elif sensor=='PSPD':
             self.pspd_force_calibrated = bead_force_cal
@@ -712,8 +725,8 @@ class FileData:
             harm_freqs = np.array([harm_freqs])
 
         # # initialize an array for the qpd ffts of x, y, and z
-        qpd_ffts = np.zeros((3, len(self.good_inds)), dtype=np.complex128)
-        qpd_sb_ffts = np.zeros((3, len(self.good_inds)*noise_bins), dtype=np.complex128)
+        qpd_ffts = np.zeros((4, len(self.good_inds)), dtype=np.complex128)
+        qpd_sb_ffts = np.zeros((4, len(self.good_inds)*noise_bins), dtype=np.complex128)
 
         # # initialize arrays for the pspd ffts of x, y, and z
         pspd_ffts = np.zeros((3, len(self.good_inds)), dtype=np.complex128)
@@ -726,15 +739,17 @@ class FileData:
         cant_fft = cant_fft_full[self.cant_inds]
 
         # loop through the axes
-        for resp in [0,1,2]:
+        for resp in [0,1,2,3]:
 
             # get the ffts for the given axis
             qpd_fft = self.qpd_ffts_full[resp,:]
-            pspd_fft = self.pspd_ffts_full[resp,:]
+            if resp<3:
+                pspd_fft = self.pspd_ffts_full[resp,:]
 
             # add the fft to the existing array, which was initialized with zeros
             qpd_ffts[resp] += qpd_fft[self.good_inds]
-            pspd_ffts[resp] += pspd_fft[self.good_inds]
+            if resp<3:
+                pspd_ffts[resp] += pspd_fft[self.good_inds]
 
             # now create a list of some number of indices on either side of the harmonic
             sideband_inds = []
@@ -759,7 +774,8 @@ class FileData:
 
             # finally, add the data at these indices to the array for this axis
             qpd_sb_ffts[resp] += qpd_fft[sideband_inds]
-            pspd_sb_ffts[resp] += pspd_fft[sideband_inds]
+            if resp<3:
+                pspd_sb_ffts[resp] += pspd_fft[sideband_inds]
 
         # save the ffts as class attributes
         self.qpd_ffts = qpd_ffts
@@ -905,6 +921,7 @@ class AggregateData:
         p0_bead = []
         diam_bead = []
         mass_bead = []
+        configs = []
         for i,dir in enumerate(self.data_dirs):
             # get the bead position wrt the stage for each directory
             if not no_config:
@@ -915,6 +932,7 @@ class AggregateData:
                             p0_bead.append(config['p0_bead'])
                             diam_bead.append(config['diam_bead'])
                             mass_bead.append(config['mass_bead'])
+                            configs.append(config)
                     except FileNotFoundError:
                         raise Exception('Error: config file not found in directory.')
                 else:
@@ -928,7 +946,7 @@ class AggregateData:
             files = os.listdir(str(dir))
             # only add files, not folders, and ensure they end with .h5 and have the correct prefix
             files = [str(dir)+'/'+f for f in files if (os.path.isfile(str(dir)+'/'+f) and \
-                                                  (self.file_prefixes[i] in f and f.endswith('.h5')))]
+                     (self.file_prefixes[i] in f and f.endswith('.h5')))]
             files.sort(key=get_file_number)
             files = files[self.first_index:]
             num_to_load = min(self.num_to_load[i],len(files))
@@ -940,6 +958,8 @@ class AggregateData:
         self.diam_bead = np.array(diam_bead)
         self.mass_bead = np.array(mass_bead)
         self.num_files = np.array(num_files)
+        if self.configs is None:
+            self.configs = configs
         self.__bin_by_config_data()
 
 
@@ -958,9 +978,14 @@ class AggregateData:
         else:
             self.__get_file_list(no_config=no_config)
             signal_models = [None]*len(self.diam_bead)
+        ### NEED TO CHANGE TO USE DIFFERENT DIAGONALIZATION MATRICES DEPENDING ON THE DATASET
+        if diagonalize_qpd:
+            qpd_diag_mat = self.configs[0]['qpd_diag_mat']
+        else:
+            qpd_diag_mat = None
         print('Loading data from {} files...'.format(len(self.file_list)))
         file_data_objs = Parallel(n_jobs=num_cores)(delayed(self.process_file)\
-                                                    (file_path,diagonalize_qpd,signal_models[self.bin_indices[i,0]],\
+                                                    (file_path,qpd_diag_mat,signal_models[self.bin_indices[i,0]],\
                                                      ml_model,self.p0_bead[self.bin_indices[i,2]],\
                                                      self.mass_bead[self.bin_indices[i,1]],harms,\
                                                      max_freq,downsample,wiener,no_tf,lightweight) \
@@ -1018,7 +1043,7 @@ class AggregateData:
         self.signal_models = signal_models
         
 
-    def process_file(self,file_path,diagonalize_qpd=False,signal_model=None,ml_model=None,p0_bead=None,\
+    def process_file(self,file_path,qpd_diag_mat=None,signal_model=None,ml_model=None,p0_bead=None,\
                      mass_bead=0,harms=[],max_freq=500.,downsample=True,wiener=[False,True,False,False,False],\
                      no_tf=False,lightweight=True):
         '''
@@ -1026,7 +1051,7 @@ class AggregateData:
         '''
         this_file = FileData(file_path)
         try:
-            this_file.load_data(diagonalize_qpd=diagonalize_qpd,signal_model=signal_model,ml_model=ml_model,\
+            this_file.load_data(qpd_diag_mat=qpd_diag_mat,signal_model=signal_model,ml_model=ml_model,\
                                 p0_bead=p0_bead,mass_bead=mass_bead,harms=harms,downsample=downsample,wiener=wiener,\
                                 max_freq=max_freq,no_tf=no_tf,lightweight=lightweight)
         except Exception as e:
@@ -1551,12 +1576,17 @@ class AggregateData:
         max_ind_y = freq_inds[2] + np.argmax(mean_ffts_y[freq_inds[2]:freq_inds[3]])
 
         # fit a lorentzian to the peaks for better peak location finding
-        p_x,_ = curve_fit(lor,freqs[freq_inds[0]:freq_inds[1]],mean_ffts_x[freq_inds[0]:freq_inds[1]],\
-                          p0=[freqs[max_ind_x],width_guess[0],1e-3])
-        max_ind_x = np.argmin(np.abs(freqs-p_x[0]))
-        p_y,_ = curve_fit(lor,freqs[freq_inds[2]:freq_inds[3]],mean_ffts_y[freq_inds[2]:freq_inds[3]],\
-                          p0=[freqs[max_ind_y],width_guess[1],1e-3])
-        max_ind_y = np.argmin(np.abs(freqs-p_y[0]))
+        try:
+            p_x,_ = curve_fit(lor,freqs[freq_inds[0]:freq_inds[1]],mean_ffts_x[freq_inds[0]:freq_inds[1]],\
+                            p0=[freqs[max_ind_x],width_guess[0],1e-3])
+            max_ind_x = np.argmin(np.abs(freqs-p_x[0]))
+            p_y,_ = curve_fit(lor,freqs[freq_inds[2]:freq_inds[3]],mean_ffts_y[freq_inds[2]:freq_inds[3]],\
+                            p0=[freqs[max_ind_y],width_guess[1],1e-3])
+            max_ind_y = np.argmin(np.abs(freqs-p_y[0]))
+        except RuntimeError:
+            print('Error: peak fitting failed!')
+            max_ind_x = np.argmin(np.abs(freqs-peak_guess[0]))
+            max_ind_y = np.argmin(np.abs(freqs-peak_guess[1]))
 
         # get the raw data from each quadrant
         raw_qpd_1 = np.array(self.agg_dict['quad_amps'][fit_inds][:,0,:],dtype=np.float64)
@@ -1572,10 +1602,6 @@ class AggregateData:
         raw_qpd_2 = raw_qpd_2/tot_at_time
         raw_qpd_3 = raw_qpd_3/tot_at_time
         raw_qpd_4 = raw_qpd_4/tot_at_time
-
-        # matrix describing naive calculation of x and y from QPD data
-        naive_mat = np.array(((1.,1.,-1.,-1.),\
-                              (1.,-1.,1.,-1.)),dtype=np.complex128)
 
         # get the ffts and phase shift them relative to quadrant 1
         fft_qpd_1_all = np.fft.rfft(raw_qpd_1)
@@ -1595,7 +1621,7 @@ class AggregateData:
             ax[1].plot(freqs,np.angle(fft_qpd_2)*180./np.pi,'.',ms='2',label='Q2')
             ax[1].plot(freqs,np.angle(fft_qpd_3)*180./np.pi,'.',ms='2',label='Q3')
             ax[1].plot(freqs,np.angle(fft_qpd_4)*180./np.pi,'.',ms='2',label='Q4')
-            ax[0].set_title('Response of Individual Quadrants')
+            ax[0].set_title('Response of individual quadrants')
             ax[1].set_xlabel('Frequency [Hz]')
             ax[1].set_xlim([min(freq_ranges)-20,max(freq_ranges)+20])
             ax[0].set_ylabel('ASD [1/$\sqrt{\mathrm{Hz}}$]')
@@ -1603,7 +1629,7 @@ class AggregateData:
             ax[1].set_ylabel('Phase [degrees]')
             ax[1].set_ylim([-200,200])
             ax[1].set_yticks([-180,0,180])
-            ax[0].legend()
+            ax[0].legend(ncol=2)
             ax[0].grid(which='both')
             ax[1].legend(ncol=2)
             ax[1].grid(which='both')
@@ -1625,18 +1651,28 @@ class AggregateData:
                                (qpd_3x,qpd_3y),
                                (qpd_4x,qpd_4y)),dtype=np.complex128)
         
-        # get the response matrix, take the real part, invert it, multiply to correct naive
-        # matrix, then rescale to give the correct total power in the resonance
-        resp_mat = np.matmul(naive_mat,signal_mat)
+        # compute the left inverse, which gives the transformation to pure x and y
+        mode_vecs = np.linalg.solve(signal_mat.T.dot(signal_mat),signal_mat.T)
+        
+        # scale the result so that the total amplitude in each peak is the same afterward
+        naive_mat = np.array(((1.,1.,-1.,-1.),\
+                              (1.,-1.,1.,-1.)),dtype=np.complex128)
+        total_naive = np.sum(np.abs(np.matmul(naive_mat,signal_mat)),axis=0)
+        total_diag = np.sum(np.abs(np.matmul(mode_vecs,signal_mat)),axis=0)
+        scale_facs = total_naive/total_diag
+
+        # for simplicity drop the imaginary parts. Power should be negligible,
+        # but check anyway
         print('Fraction of power in imaginary parts to be discarded:')
         print('x->x: {:.3f}, x->y: {:.3f}, y->x: {:.3f}, y->y: {:.3f}'\
-              .format(*np.square(np.imag(resp_mat)/np.abs(resp_mat)).flatten()))
-        resp_mat = np.real(resp_mat)
-        # only scale by the power in the out-of-phase parts
-        scale_mat = np.diag(np.sqrt(np.sum(np.square(resp_mat),axis=0)))
-        resp_inv = np.linalg.inv(resp_mat)
-        diag_unscaled = np.real(np.matmul(resp_inv,naive_mat))
-        diag_mat = np.matmul(scale_mat,diag_unscaled)
+              .format(*np.square(np.imag(mode_vecs)/np.abs(mode_vecs)).flatten()))
+        mode_vecs = scale_facs[:,np.newaxis]*np.real(mode_vecs)
+
+        # find the null vectors, which we expect to span the scattered-light-only space
+        light_vecs = null_space(mode_vecs)
+        
+        # u = np.real(np.linalg.inv(u))[2:4,:]
+        diag_mat = np.vstack([mode_vecs,light_vecs.T])
 
         if plot:
             cross_coupling(self.agg_dict,diag_mat,p_x=p_x,p_y=p_y,plot_inds=fit_inds,plot_null=True)
@@ -1645,12 +1681,13 @@ class AggregateData:
         if np.prod(np.sign(diag_mat[:,:2]))!=-1:
             print('Warning: both rows correspond to the same physical mode!')
             print(diag_mat)
-            return
 
         print('Diagonalization successful!')
         print('Copy the following into the config.yaml files for the relevant datasets:')
-        print('qpd_diag_mat: [[{:.8f},{:.8f},{:.8f},{:.8f}],[{:.8f},{:.8f},{:.8f},{:.8f}]]'\
-              .format(*[i for i in diag_mat.flatten()]))
+        print('qpd_diag_mat: [[{:.8f},{:.8f},{:.8f},{:.8f}],[{:.8f},{:.8f},{:.8f},{:.8f}],'\
+              +'[{:.8f},{:.8f},{:.8f},{:.8f}]]'.format(*[i for i in diag_mat.flatten()]))
+
+        return diag_mat
 
 
     def merge_objects(self,object_list):

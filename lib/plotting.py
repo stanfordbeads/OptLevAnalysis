@@ -27,7 +27,7 @@ def polar_plots(agg_dict,descrip=None,indices=None,unwrap=False,axis_ind=0,senso
     harms = freqs[agg_dict['good_inds']]
     cmap_polar = plt.get_cmap('inferno') 
     cmap_polar.set_under(color='white',alpha=0)
-    axes = ['$x$','$y$','$z$']
+    axes = ['$x$','$y$','$z$','null']
     subplot_kw = {'projection':'polar'}
     if unwrap:
         subplot_kw = {}
@@ -43,14 +43,11 @@ def polar_plots(agg_dict,descrip=None,indices=None,unwrap=False,axis_ind=0,senso
             yuk_ffts = agg_dict['template_ffts'][indices][h]
             lambdas = agg_dict['template_params'][indices][h]
             ten_um_ind = np.argmin(np.abs(lambdas-1e-5))
-            zero_phase = np.angle(yuk_ffts[ten_um_ind,axis_ind,h])
-            # ax.plot(np.pi*np.ones(4),[1e-18,1e-17,1e-16, 1e-15],\
-            #         markersize=10, color='xkcd:electric green', ls='dotted', lw=5)
-            ax.plot(np.pi*np.ones(len(alphas)),np.abs(yuk_ffts[ten_um_ind,axis_ind,h])*alphas,\
+            temp_ind = axis_ind*(axis_ind<3)
+            zero_phase = np.angle(yuk_ffts[ten_um_ind,temp_ind,h])
+            ax.plot(np.pi*np.ones(len(alphas)),np.abs(yuk_ffts[ten_um_ind,temp_ind,h])*alphas,\
                     color='xkcd:electric green',ls='none',marker='d',ms=10)
-            # ax.plot(np.zeros(4),[1e-18,1e-17,1e-16, 1e-15],
-            #         markersize=10, color='xkcd:neon blue', ls='dotted', lw=5)
-            ax.plot(np.zeros(len(alphas)),np.abs(yuk_ffts[ten_um_ind,axis_ind,h])*alphas,\
+            ax.plot(np.zeros(len(alphas)),np.abs(yuk_ffts[ten_um_ind,temp_ind,h])*alphas,\
                     color='xkcd:neon blue',ls='none',marker='d',ms=10)
         phase = np.angle(ffts*np.exp(-1j*zero_phase))
         _,_,_,im = ax.hist2d(phase,np.abs(ffts),bins=(phase_bins,amp_bins),cmap=cmap_polar,vmin=1,vmax=vmax)
@@ -105,13 +102,19 @@ def xy_on_qpd(qpd_diag_mat):
     misalignment and non-orthogonality.
     '''
 
-    # calculate QPD coords in bead eignespace
-    Q_trans_xy = np.matmul(qpd_diag_mat,np.diag(np.ones(4)))
-    Q_trans_xy[:,-2:] = Q_trans_xy[:,:-3:-1]
+    # calculate QPD coords in bead eigenspace
+    Q_trans_xy = np.matmul(qpd_diag_mat,np.array(((1,0,0,-1),(0,1,-1,0),(0,-1,1,0),(-1,0,0,1)))) #np.diag(np.ones(4)))
+
+    # make the box representing the bead eigenmode QPD
+    points = Q_trans_xy[:2,:].T
+    centroid = np.mean(points, axis=0)
+    angles = np.arctan2(points[:, 1] - centroid[1], points[:, 0] - centroid[0])
+    sorted_indices = np.argsort(angles)
+    qpd_box = points[sorted_indices]
 
     # calculate QPD axes in bead eigenspace
-    Q_hor_xy = np.matmul(qpd_diag_mat,(1.,1.,-1.,-1.))
-    Q_ver_xy = np.matmul(qpd_diag_mat,(1.,-1.,1.,-1.))
+    Q_hor_xy = 10*np.matmul(qpd_diag_mat,(1.,1.,-1.,-1.))
+    Q_ver_xy = 10*np.matmul(qpd_diag_mat,(1.,-1.,1.,-1.))
 
     # calculate bead eigenmodes in physical space
     xy_mode_phys = np.array(((qpd_diag_mat[1,0]-qpd_diag_mat[1,1],qpd_diag_mat[0,1]-qpd_diag_mat[0,0]),\
@@ -125,10 +128,10 @@ def xy_on_qpd(qpd_diag_mat):
 
     # Plotted axes are bead motion axes
     ax1,ax2 = axs
-    ax1.set_xlim([-2,2])
-    ax1.set_ylim([-2,2])
+    ax1.set_xlim([-4,4])
+    ax1.set_ylim([-4,4])
     ax1.set_yticks([-2,-1,0,1,2])
-    ax1.add_patch(plt.Polygon(Q_trans_xy.T,ls='-',lw=0.5,edgecolor='black',facecolor='lightgray'))
+    ax1.add_patch(plt.Polygon(qpd_box,ls='-',lw=0.5,edgecolor='black',facecolor='lightgray'))
     ax1.axhline(0,color=colors[0],label='Bead $x$ mode')
     ax1.axvline(0,color=colors[2],label='Bead $y$ mode')
     ax1.plot(np.array([-Q_hor_xy[0],0,Q_hor_xy[0]]),np.array([-Q_hor_xy[1],0,Q_hor_xy[1]]),color=colors[1],label='QPD axes')
@@ -184,7 +187,8 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None,plot_n
     signal_mat = np.array((raw_qpd_1,raw_qpd_2,raw_qpd_3,raw_qpd_4))
 
     naive_mat = np.array(((1.,1.,-1.,-1.),\
-                          (1.,-1.,1.,-1.)))
+                          (1.,-1.,1.,-1.),\
+                          (1.,-1.,-1.,1.)))
 
     # do the transformations from quadrants to x and y
     new_resp = np.einsum('ij,jkl->ikl',qpd_diag_mat,signal_mat)
@@ -193,35 +197,35 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None,plot_n
     # pick out the new x and y coordinates
     x_raw = raw_resp[0,:,:]
     y_raw = raw_resp[1,:,:]
+    n_raw = raw_resp[2,:,:]
     x_corr = new_resp[0,:,:]
     y_corr = new_resp[1,:,:]
+    n_corr = new_resp[2,:,:]
 
     asd_x_raw = np.sqrt(np.mean(np.abs(np.fft.rfft(x_raw)*fft_to_asd)**2,axis=0))[:len(freqs)]
     asd_y_raw = np.sqrt(np.mean(np.abs(np.fft.rfft(y_raw)*fft_to_asd)**2,axis=0))[:len(freqs)]
+    asd_n_raw = np.sqrt(np.mean(np.abs(np.fft.rfft(n_raw)*fft_to_asd)**2,axis=0))[:len(freqs)]
     asd_x_corr = np.sqrt(np.mean(np.abs(np.fft.rfft(x_corr)*fft_to_asd)**2,axis=0))[:len(freqs)]
     asd_y_corr = np.sqrt(np.mean(np.abs(np.fft.rfft(y_corr)*fft_to_asd)**2,axis=0))[:len(freqs)]
+    asd_n_corr = np.sqrt(np.mean(np.abs(np.fft.rfft(n_corr)*fft_to_asd)**2,axis=0))[:len(freqs)]
 
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     fig,ax = plt.subplots()
-    ax.semilogy(freqs,asd_x_raw,label='Naive $x$',color=colors[0],alpha=0.5)
-    ax.semilogy(freqs,asd_y_raw,label='Naive $y$',color=colors[1],alpha=0.5)
-    if plot_null:
-        null_naive = np.array(((1.,-1.,-1.,1.),\
-                               (1.,1.,1.,1.)))
-        null_raw = np.einsum('ij,jkl->ikl',null_naive,signal_mat)[0,:,:]
-        asd_null_raw = np.sqrt(np.mean(np.abs(np.fft.rfft(null_raw)*fft_to_asd)**2,axis=0))[:len(freqs)]
-    ax.semilogy(freqs,asd_x_corr,label='Diag. $x$',color=colors[0],lw=1)
-    ax.semilogy(freqs,asd_y_corr,label='Diag. $y$',color=colors[1],lw=1)
+    ax.semilogy(freqs,asd_x_raw,label='Naive $x$',color=colors[2],ls=':',alpha=0.5)
+    ax.semilogy(freqs,asd_y_raw,label='Naive $y$',color=colors[3],ls=':',alpha=0.5)
     if (p_x is not None) and (p_y is not None):
-        ax.semilogy(freqs,lor(freqs,*p_x),label='Peak fit $x$',color=colors[2])
-        ax.semilogy(freqs,lor(freqs,*p_y),label='Peak fit $y$',color=colors[3])
+        ax.semilogy(freqs,lor(freqs,*p_x),label='Peak fit $x$',color=colors[2],alpha=0.8)
+        ax.semilogy(freqs,lor(freqs,*p_y),label='Peak fit $y$',color=colors[3],alpha=0.8)
+    ax.semilogy(freqs,asd_x_corr,label='Diag. $x$',color=colors[0],lw=1,alpha=0.8)
+    ax.semilogy(freqs,asd_y_corr,label='Diag. $y$',color=colors[1],lw=1,alpha=0.8)
     if plot_null:
-        ax.semilogy(freqs,asd_null_raw,label='Null',color=colors[4],alpha=0.5)
+        ax.semilogy(freqs,asd_n_raw,label='Naive null',color=colors[4],alpha=0.5)
+        ax.semilogy(freqs,asd_n_corr,label='Diag. null',color=colors[5],alpha=0.8)
     ax.set_xlim([280,420])
     ax.set_ylim([1e-2,1e2])
     ax.set_xlabel('Frequency [Hz]')
     ax.set_ylabel('ASD [1/$\sqrt{\mathrm{Hz}}$]')
-    ax.set_title('QPD Diagonalization')
+    ax.set_title('QPD diagonalization')
     ax.grid(which='both')
     ax.legend(ncol=3+plot_null*1)
 
@@ -304,7 +308,7 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000):
     return fig,ax
 
 
-def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False):
+def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,pspd=True):
     '''
     Plof of the QPD and PSPD spectra for a given dataset.
     '''
@@ -319,19 +323,23 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False):
 
     qpd_x_asds = np.abs(agg_dict['qpd_ffts_full'][:,0,:]*fft_to_asd)
     qpd_y_asds = np.abs(agg_dict['qpd_ffts_full'][:,1,:]*fft_to_asd)
+    qpd_n_asds = np.abs(agg_dict['qpd_ffts_full'][:,3,:]*fft_to_asd)
     pspd_x_asds = np.abs(agg_dict['pspd_ffts_full'][:,0,:]*fft_to_asd)
     pspd_y_asds = np.abs(agg_dict['pspd_ffts_full'][:,1,:]*fft_to_asd)
     z_asds = np.abs(agg_dict['qpd_ffts_full'][:,2,:]*fft_to_asd)
+    if accel:
     # convert accelerometer data to m/s^2 using 1000 V/g calibration factor
-    accel_ffts = np.fft.rfft(agg_dict['accelerometer']*9.8/1000.,axis=1)[:,:len(freqs)]*2./window_s1
-    accel_asds = np.abs(accel_ffts*fft_to_asd)
+        accel_ffts = np.fft.rfft(agg_dict['accelerometer']*9.8/1000.,axis=1)[:,:len(freqs)]*2./window_s1
+        accel_asds = np.abs(accel_ffts*fft_to_asd)
 
     qpd_x_asd = np.sqrt(np.mean(qpd_x_asds**2,axis=0))
     qpd_y_asd = np.sqrt(np.mean(qpd_y_asds**2,axis=0))
+    qpd_n_asd = np.sqrt(np.mean(qpd_n_asds**2,axis=0))
     pspd_x_asd = np.sqrt(np.mean(pspd_x_asds**2,axis=0))
     pspd_y_asd = np.sqrt(np.mean(pspd_y_asds**2,axis=0))
     z_asd = np.sqrt(np.mean(z_asds**2,axis=0))
-    accel_asd = np.sqrt(np.mean(accel_asds**2,axis=0))
+    if accel:
+        accel_asd = np.sqrt(np.mean(accel_asds**2,axis=0))
 
     fig,ax = plt.subplots()
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
@@ -344,9 +352,11 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False):
             ylim = [1e-17,2e-14]
         ax.semilogy(freqs,qpd_x_asd,lw=1,alpha=0.65,label='QPD $x$')
         ax.semilogy(freqs,qpd_y_asd,lw=1,alpha=0.65,label='QPD $y$')
-        ax.semilogy(freqs,pspd_x_asd,lw=1,alpha=0.65,label='PSPD $x$')
-        ax.semilogy(freqs,pspd_y_asd,lw=1,alpha=0.65,label='PSPD $y$')
-        ax.semilogy(freqs,z_asd,lw=1,alpha=0.65,label='$z$')
+        ax.semilogy(freqs,qpd_n_asd,lw=1,alpha=0.65,label='QPD null')
+        if pspd:
+            ax.semilogy(freqs,pspd_x_asd,lw=1,alpha=0.65,label='PSPD $x$')
+            ax.semilogy(freqs,pspd_y_asd,lw=1,alpha=0.65,label='PSPD $y$')
+            ax.semilogy(freqs,z_asd,lw=1,alpha=0.65,label='$z$')
         if accel:
             ax2 = ax.twinx()
             ax2.semilogy(freqs,accel_asd,lw=1,alpha=0.65,color=colors[len(ax.lines)],label='Accel.')
@@ -359,9 +369,11 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False):
             ylim = [1e-18,2e-14]
         ax.loglog(freqs,qpd_x_asd,lw=1,alpha=0.65,label='QPD $x$')
         ax.loglog(freqs,qpd_y_asd,lw=1,alpha=0.65,label='QPD $y$')
-        ax.loglog(freqs,pspd_x_asd,lw=1,alpha=0.65,label='PSPD $x$')
-        ax.loglog(freqs,pspd_y_asd,lw=1,alpha=0.65,label='PSPD $y$')
-        ax.loglog(freqs,z_asd,lw=1,alpha=0.65,label='$z$')
+        ax.loglog(freqs,qpd_n_asd,lw=1,alpha=0.65,label='QPD null')
+        if pspd:
+            ax.loglog(freqs,pspd_x_asd,lw=1,alpha=0.65,label='PSPD $x$')
+            ax.loglog(freqs,pspd_y_asd,lw=1,alpha=0.65,label='PSPD $y$')
+            ax.loglog(freqs,z_asd,lw=1,alpha=0.65,label='$z$')
         if accel:
             ax2 = ax.twinx()
             ax2.loglog(freqs,accel_asd,lw=1,alpha=0.65,color=colors[len(ax.lines)],label='Accel.')
@@ -772,7 +784,7 @@ def limit_vs_integration(agg_dict,descrip=None,sensor='qpd'):
         for j,ind in enumerate(subset_inds):
             indices = np.random.randint(0,num_files,ind)
             like_coeffs = fit_alpha_all_files(agg_dict,indices,sensor=sensor)
-            like_coeffs = combine_likelihoods_by_harm(like_coeffs)
+            like_coeffs = combine_likelihoods_over_dim(like_coeffs,which='file')
             like_coeffs = group_likelihoods_by_test(like_coeffs)
             lim_pos[i,j] = get_limit_from_likelihoods(like_coeffs[:,ten_um_ind,:],alpha_sign=1)
             lim_neg[i,j] = get_limit_from_likelihoods(like_coeffs[:,ten_um_ind,:],alpha_sign=-1)
