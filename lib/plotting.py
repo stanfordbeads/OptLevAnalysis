@@ -232,39 +232,64 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None,plot_n
     return fig,ax
 
 
-def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000):
+def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000,agg_dict=None,\
+                   resonance_drive_factors=[1.,1.,5.]):
     '''
     Plot the transfer functions and the fits for all axes.
+
+    :path:                      path to the saved .h5 processed transfer function file
+    :sensor:                    QPD or PSPD, depending on which should be plotted
+    :phase:                     if True, plot the phases, otherwise plot the amplitudes
+    :agg_dict:                  if provided, data from the agg_dict will be shown rather than the data in the TF file
+    :resonance_drive_factors:   factor by which the driving force was scaled down near the resonance for [x,y,z]
     '''
 
-    # set some basic parameters
-    freqs = np.fft.rfftfreq(int(nsamp),d=1/fsamp)
-    cal_drive_freq = 71.
-    drive_freq_ind = np.argmin(np.abs(freqs-cal_drive_freq))
-    axes = ['x','y','z']
+    # get the transfer function file with fits
+    with h5py.File(path) as tf_file:
+        # get raw data from the processed file or the agg_dict argument
+        if not phase and agg_dict is not None:
+            tf_data = agg_dict[sensor.lower()+'_ffts_full'][:,:3,:]
+            freqs = agg_dict['freqs']
+            tf_freqs = np.arange(1,700,1)
+            tf_freq_inds = np.array([np.argmin(np.abs(freqs - f)) for f in tf_freqs])
+            tf_data = tf_data[:,:,tf_freq_inds]
+            # add two more axes since the saved data has an independent frequency array for each
+            tf_freqs = tf_freqs[np.newaxis,:].repeat(3,axis=0)
+            tf_freqs = tf_freqs[np.newaxis,:].repeat(3,axis=0)
+            drive_ratios = np.ones_like(tf_freqs,dtype=float)
+            for i in range(3):
+                drive_ratios[i,:,:][(tf_freqs[i,:,:]>=300) & (tf_freqs[i,:,:]<450)] /= resonance_drive_factors[i]
+        else:
+            tf_data = tf_file['measurements/'+sensor+'/TF'][:,:,:]
+            tf_freqs = tf_file['measurements/'+sensor+'/ff'][:,:,:]
+            freqs = np.fft.rfftfreq(int(nsamp),d=1/fsamp)
+            drive_ratios = np.ones_like(tf_freqs)
 
-    # get the transfer function file with fits and raw data
-    tf_file = h5py.File(path)
-    tf_data = tf_file['measurements/'+sensor+'/TF'][:,:,:]
-    tf_freqs = tf_file['measurements/'+sensor+'/ff'][:,:,:]
+        # set some basic parameters
+        reference_freq = 71.
+        axes = ['x','y','z']
+        drive_freq_ind = np.argmin(np.abs(tf_freqs[0,0,:]-reference_freq))
 
-    # extract the transfer function matrix
-    Harr = np.zeros((len(freqs), 3, 3), dtype=complex)
-    Harr[:,0,0] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zXX'], tf_file['fits/'+sensor+'/pXX'], \
-                                        tf_file['fits/'+sensor+'/kXX']/tf_file.attrs['scaleFactors_'+sensor][0], 2*np.pi*freqs)[1]
-    Harr[:,1,1] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zYY'], tf_file['fits/'+sensor+'/pYY'], \
-                                        tf_file['fits/'+sensor+'/kYY']/tf_file.attrs['scaleFactors_'+sensor][1], 2*np.pi*freqs)[1]
-    Harr[:,2,2] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zZZ'], tf_file['fits/'+sensor+'/pZZ'], \
-                                        tf_file['fits/'+sensor+'/kZZ']/tf_file.attrs['scaleFactors_'+sensor][2], 2*np.pi*freqs)[1]
+        # extract the transfer function matrix
+        Harr = np.zeros((len(freqs), 3, 3), dtype=complex)
+        Harr[:,0,0] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zXX'],tf_file['fits/'+sensor+'/pXX'], \
+                                         tf_file['fits/'+sensor+'/kXX']/tf_file.attrs['scaleFactors_'+sensor][0], 2*np.pi*freqs)[1]
+        Harr[:,1,1] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zYY'],tf_file['fits/'+sensor+'/pYY'], \
+                                         tf_file['fits/'+sensor+'/kYY']/tf_file.attrs['scaleFactors_'+sensor][1], 2*np.pi*freqs)[1]
+        Harr[:,2,2] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zZZ'],tf_file['fits/'+sensor+'/pZZ'], \
+                                         tf_file['fits/'+sensor+'/kZZ']/tf_file.attrs['scaleFactors_'+sensor][2], 2*np.pi*freqs)[1]
+        
+        # get force calibration factors
+        force_cal_factors = np.array([np.abs(Harr[drive_freq_ind,i,i]) for i in range(3)])
+
+    # if agg_dict is passed, scale it to the correct units
+    if agg_dict is not None:
+        for i in range(3):
+            tf_data[:,i,:] *= force_cal_factors[i]
+            tf_data[:,i,:] /= np.abs(tf_data[i,i,drive_freq_ind])
     
-    # get force calibration factors
-    force_cal_factors = []
-    for i in range(3):
-        force_cal_factors.append(np.abs(Harr[drive_freq_ind,i,i]))
-    force_cal_factors = np.array(force_cal_factors)
-
     # get indices of frequencies driven during TF measurement
-    tf_freq_inds = np.zeros_like(tf_freqs)
+    tf_freq_inds = np.zeros_like(tf_freqs,dtype=int)
     for i in range(tf_freqs.shape[0]):
         for j in range(tf_freqs.shape[1]):
             for k in range(tf_freqs.shape[2]):
@@ -277,43 +302,48 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000):
     title = 'magnitudes'
     if phase:
         title = 'phases'
-    fig,ax = plt.subplots(rows,3,figsize=(9,2*rows+1),sharex=True,sharey=True)
-    fig.suptitle('Transfer function '+title+' for the '+sensor)
+    fig,ax = plt.subplots(rows,3,figsize=(12,2*rows+4),sharex=True,sharey=True)
+    fig.suptitle('Transfer function '+title+' for the '+sensor,fontsize=24)
     for i in range(rows):
         if phase:
             ax[i,0].set_ylabel('Phase [$^\circ$]')
-            ax[i,0].set_ylim([-200,200])
-            ax[i,0].set_yticks([-180,0,180])
         else:
             ax[i,0].set_ylabel('Mag [N/N]')
         for j in range(3):
             ax[0,j].set_title('Drive $'+axes[j]+'$')
             ax[-1,j].set_xlabel('Frequency [Hz]')
             if phase:
-                ax[i,j].semilogx(tf_freqs[i,j],np.angle(tf_data[i,j])*180./np.pi,linestyle='none',\
-                                                        marker='o',ms=4,alpha=0.5,label='Measurement')
+                ax[i,j].semilogx(tf_freqs[j,i],np.angle(tf_data[j,i])*180./np.pi,linestyle='none',\
+                                                        marker='o',ms=4,alpha=0.3,label='Measurement')
                 if i==j:
-                    ax[i,j].semilogx(freqs[tf_freq_inds[i,j]],np.angle(np.ones(len(tf_data[i,j]))\
-                                     /Harr[:,i,j][tf_freq_inds[i,j]])*180./np.pi,lw=2,label='Fit')
+                    ax[i,j].semilogx(freqs[tf_freq_inds[j,i]],np.angle(np.ones(len(tf_data[j,i]))\
+                                     /Harr[:,j,i][tf_freq_inds[j,i]])*180./np.pi,lw=2,label='Fit')
+                ax[i,j].set_ylim([-200,200])
+                ax[i,j].set_yticks([-180,-90,0,90,180])
             else:
-                ax[i,j].loglog(tf_freqs[i,j],np.abs(tf_data[i,j]),linestyle='none',\
-                               marker='o',ms=4,alpha=0.5,label='Measurement')
+                ax[i,j].loglog(tf_freqs[j,i],np.abs(tf_data[j,i]*drive_ratios[j,i]),linestyle='none',\
+                               marker='o',ms=4,alpha=0.3,label='Measurement')
                 if i==j:
                     ax[i,j].loglog(freqs[tf_freq_inds[i,j]],force_cal_factors[i]*np.ones(len(tf_data[i,j]))\
                                    /np.abs(Harr[:,i,j][tf_freq_inds[i,j]]),lw=2,label='Fit')
-                    ax[i,j].text(1.5,2e-3,r'{{{:.3e}}} N/count'.format(force_cal_factors[i]),fontsize=14)
+                    ax[i,j].text(1.5,1e-2,r'{{{:.3e}}} N/count'.format(force_cal_factors[i]),fontsize=14)
+                ax[i,j].set_ylim([5e-3,2e2])
+                ax[i,j].set_yticks(np.logspace(-2,2,5))
             ax[i,j].grid(which='both')
-        ax[i,i].legend(fontsize=10)
+        ax[i,i].legend(loc='upper left',fontsize=10)
 
     return fig,ax
 
 
-def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,pspd=True):
+def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,pspd=True,plot_inds=None):
     '''
     Plof of the QPD and PSPD spectra for a given dataset.
     '''
     if descrip is None:
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
+
+    if plot_inds is None:
+        plot_inds = np.array(range(agg_dict['times'].shape[0]))
 
     freqs = agg_dict['freqs']
     fsamp = agg_dict['fsamp']
@@ -321,12 +351,12 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,psp
     window_s2 = agg_dict['window_s2']
     fft_to_asd = window_s1/np.sqrt(2.*fsamp*window_s2)
 
-    qpd_x_asds = np.abs(agg_dict['qpd_ffts_full'][:,0,:]*fft_to_asd)
-    qpd_y_asds = np.abs(agg_dict['qpd_ffts_full'][:,1,:]*fft_to_asd)
-    qpd_n_asds = np.abs(agg_dict['qpd_ffts_full'][:,3,:]*fft_to_asd)
-    pspd_x_asds = np.abs(agg_dict['pspd_ffts_full'][:,0,:]*fft_to_asd)
-    pspd_y_asds = np.abs(agg_dict['pspd_ffts_full'][:,1,:]*fft_to_asd)
-    z_asds = np.abs(agg_dict['qpd_ffts_full'][:,2,:]*fft_to_asd)
+    qpd_x_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds,0,:]*fft_to_asd)
+    qpd_y_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds,1,:]*fft_to_asd)
+    qpd_n_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds,3,:]*fft_to_asd)
+    pspd_x_asds = np.abs(agg_dict['pspd_ffts_full'][plot_inds,0,:]*fft_to_asd)
+    pspd_y_asds = np.abs(agg_dict['pspd_ffts_full'][plot_inds,1,:]*fft_to_asd)
+    z_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds,2,:]*fft_to_asd)
     if accel:
     # convert accelerometer data to m/s^2 using 1000 V/g calibration factor
         accel_ffts = np.fft.rfft(agg_dict['accelerometer']*9.8/1000.,axis=1)[:,:len(freqs)]*2./window_s1
