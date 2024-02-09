@@ -1,8 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
+from matplotlib.colors import LogNorm,to_rgba
 import matplotlib.style as style
 from matplotlib.lines import Line2D
+from matplotlib.patches import Rectangle
 from datetime import datetime
 from scipy import signal
 import h5py
@@ -221,7 +222,7 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None,plot_n
     ax.semilogy(freqs,asd_y_corr,label='Diag. $y$',color=colors[1],lw=1,alpha=0.8)
     if plot_null:
         ax.semilogy(freqs,asd_n_raw,label='Naive null',color=colors[4],alpha=0.5)
-        ax.semilogy(freqs,asd_n_corr*1e2,label='100x diag. null',color=colors[5],alpha=0.8)
+        ax.semilogy(freqs,asd_n_corr*1e2,label=r'100$\times$ diag. null',color=colors[5],alpha=0.8)
     ax.set_xlim([280,420])
     ax.set_ylim([1e-1,1e2])
     ax.set_xlabel('Frequency [Hz]')
@@ -336,19 +337,24 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000,agg_dict
     return fig,ax
 
 
-def visual_diag_mat(qpd_diag_mat):
+def visual_diag_mat(qpd_diag_mat,overlay=True):
     '''
     Visualize the effect of the QPD diagonalization matrix.
     '''
 
     # combine the two null channels into one
     reduced_mat = qpd_diag_mat[:3,:]
-    reduced_mat[-1,:] = np.sqrt(np.sum(qpd_diag_mat[3:,:]**2,axis=0))
+    reduced_mat[-1,:] = np.sum(qpd_diag_mat[3:,:],axis=0)/2.
     signs = np.sign(reduced_mat)
-    sidelengths = np.sqrt(np.abs(reduced_mat))
+    if overlay:
+        reduced_mat *= 2/np.linalg.norm(reduced_mat)
+        areas = np.cumsum(np.abs(reduced_mat),axis=0)
+        sidelengths = np.sqrt(areas)
+    else:
+        sidelengths = np.sqrt(np.abs(reduced_mat))
 
-    fig,ax = plt.subplots()
-    ax.set_title('Quadrant weights from diagonalization matrix')
+    fig,ax = plt.subplots(figsize=(5,5))
+    ax.set_title('QPD weights from diagonalization matrix')
     ax.set_xlim([-2,2])
     ax.set_ylim([-2,2])
     ax.set_xticks([])
@@ -356,8 +362,9 @@ def visual_diag_mat(qpd_diag_mat):
     ax.set_xlabel('')
     ax.set_ylabel('')
     ax.set_aspect('equal')
-    colors = style.library['fivethirtyeight']['axes.prop_cycle'].by_key()['color']
+    colors = style.library['seaborn-v0_8-pastel']['axes.prop_cycle'].by_key()['color']
     linestyles = ['--','-']
+    hatches = ['\\\\\\\\','']
     lines = []
     labels = ['$x$','$y$','null','weight $<$ 0']
     [x.set_linewidth(2) for x in ax.spines.values()]
@@ -365,21 +372,39 @@ def visual_diag_mat(qpd_diag_mat):
 
     # loop through axes, then through quadrants
     for i in range(3):
-        lines.append(Line2D([0,1],[0,1],linestyle='-',color=colors[i]))
+        if overlay:
+            lines.append(Rectangle([0,0],0,0,facecolor=to_rgba(colors[2-i],0.3),\
+                                   edgecolor=to_rgba(colors[2-i],1.)))
+        else:
+            lines.append(Line2D([0,1],[0,1],linestyle='-',color=colors[i]))
         for j in range(4):
-            ver_edge = 0.5*(1+sidelengths[i,j]*quadrants[j,0]/2.)
-            hor_edge = 0.5*(1+sidelengths[i,j]*quadrants[j,1]/2.)
-            ax.axvline(sidelengths[i,j]*quadrants[j,0],0.5,hor_edge,color=colors[i],ls=linestyles[signs[i,j]>0],lw=2,alpha=0.8)
-            ax.axhline(sidelengths[i,j]*quadrants[j,1],0.5,ver_edge,color=colors[i],ls=linestyles[signs[i,j]>0],lw=2,alpha=0.8)
+            if overlay:
+                width = sidelengths[2-i,j]
+                corner = -np.array(quadrants[j]==-1,dtype=int)
+                ax.add_patch(Rectangle(corner*(width),width,width,color='white'))
+                ax.add_patch(Rectangle(corner*(width),width,width,facecolor=to_rgba(colors[2-i],0.3),\
+                                       edgecolor=to_rgba(colors[2-i],1.),hatch=hatches[signs[2-i,j]>0]))
+            else:
+                ver_edge = 0.5*(1+sidelengths[i,j]*quadrants[j,0]/2.)
+                hor_edge = 0.5*(1+sidelengths[i,j]*quadrants[j,1]/2.)
+                ax.axvline(sidelengths[i,j]*quadrants[j,0],0.5,hor_edge,color=colors[i],\
+                           ls=linestyles[signs[i,j]>0],lw=2,alpha=0.8)
+                ax.axhline(sidelengths[i,j]*quadrants[j,1],0.5,ver_edge,color=colors[i],\
+                           ls=linestyles[signs[i,j]>0],lw=2,alpha=0.8)
 
-    lines.append(Line2D([0,1],[0,1],linestyle='--',color='k'))
+    if overlay:
+        lines = lines[::-1]
+        lines.append(Rectangle([0,0],0,0,alpha=0.3,hatch=hatches[0],color='k'))
+    else:
+        lines.append(Line2D([0,1],[0,1],linestyle=linestyles[0],color='k'))
     ax.axvline(0,color='k',lw=2)
     ax.axhline(0,color='k',lw=2)
     ax.text(1.6,1.6,'1',fontsize=30)
     ax.text(1.6,-1.7,'2',fontsize=30)
     ax.text(-1.7,1.6,'3',fontsize=30)
     ax.text(-1.7,-1.7,'4',fontsize=30)
-    ax.legend(lines,labels,loc='lower left',bbox_to_anchor=(0.5,0,0.5,0.5),ncol=2,handlelength=1.3,columnspacing=0.6)
+    ax.legend(lines,labels,loc='lower left',bbox_to_anchor=(0.5,0,0.5,0.5),\
+              ncol=2,handlelength=1.3,columnspacing=0.6)
 
     return fig,ax
 
