@@ -1,6 +1,7 @@
 import numpy as np
-from scipy.optimize import minimize,root_scalar,brentq,newton,differential_evolution
+from scipy.optimize import minimize
 from scipy.stats import chi2,norm
+from scipy.interpolate import CubicSpline
 from joblib import Parallel, delayed
 from tqdm import tqdm
 from funcs import *
@@ -354,34 +355,23 @@ def get_alpha_scale(likelihood_coeffs,lambdas):
     return 10**np.array((median,lower_1s,upper_1s))
 
 
-def nll_with_background(x,agg_dict,file_inds=None,delta_means=[0.1,0.1],lamb=1e-5,alpha=None):
+def nll_with_background(x,agg_dict,file_inds=None,alpha=None,lamb=1e-5,single_beta=False,\
+                        num_gammas=1,delta_means=[0.1,0.1],spline=False,axes=['x','y']):
     '''
     Implementation of the negative log-likelihood function including both the signal
     model and an in-situ background measurement on some additional data stream.
     '''
 
-    # can minimize the conditional or unconditional NLL depending on whether an alpha is passed
-    if alpha is None:
-        # alpha,beta,gamma_x,gamma_y = x
-        alpha = x[0]
-        beta = x[1:-2]
-        gamma_x = x[-2]
-        gamma_y = x[-1]
-    else:
-        # beta,gamma_x,gamma_y = x
-        beta = x[:-2]
-        gamma_x = x[-2]
-        gamma_y = x[-1]
-
     if file_inds is None:
         file_inds = np.array(range(agg_dict['times'].shape[0]))
 
-    if len(beta)>1:
-        beta = beta.reshape(2,-1)[np.newaxis,:,:]
-    else:
-        beta = beta[0]
-    gammas = np.array([gamma_x,gamma_y])[np.newaxis,:,np.newaxis]
-    deltas = np.array(delta_means)[np.newaxis,:,np.newaxis]
+    # choose which axes to include
+    first_axis = 0
+    second_axis = 2
+    if 'x' not in axes:
+        first_axis = 1
+    if 'y' not in axes:
+        second_axis = 1
 
     # work with a single value of lambda
     lambdas = agg_dict['template_params'][0]
@@ -393,9 +383,6 @@ def nll_with_background(x,agg_dict,file_inds=None,delta_means=[0.1,0.1],lamb=1e-
     qpd_sb_ffts = agg_dict['qpd_sb_ffts'][file_inds]
     num_sb = int(qpd_sb_ffts.shape[2]/qpd_ffts.shape[2])
 
-    # initialize the negative log likelihood
-    nll_array = np.zeros_like(qpd_ffts[:,:2,:])
-
     # get the background measurements
     background = qpd_ffts[:,3,np.newaxis,:]
     background_real = np.real(background)
@@ -404,26 +391,63 @@ def nll_with_background(x,agg_dict,file_inds=None,delta_means=[0.1,0.1],lamb=1e-
     background_var = (1./(2.*num_sb))*np.sum(np.real(background_sb_ffts)**2+np.imag(background_sb_ffts)**2,axis=-1)
 
     # get the measurements for each file/axis/harm
-    data = qpd_ffts[:,:2,:]
+    data = qpd_ffts[:,first_axis:second_axis,:]
     data_real = np.real(data)
     data_imag = np.imag(data)
-    data_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,:2,...]
+    data_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,first_axis:second_axis,...]
     data_var = (1./(2.*num_sb))*np.sum(np.real(data_sb_ffts)**2+np.imag(data_sb_ffts)**2,axis=-1)
 
     # get the templates for each file/axis/harm
-    signal_real = np.real(yuk_ffts[:,:2,:])
-    signal_imag = np.imag(yuk_ffts[:,:2,:])
+    signal_real = np.real(yuk_ffts[:,first_axis:second_axis,:])
+    signal_imag = np.imag(yuk_ffts[:,first_axis:second_axis,:])
 
-    # add to the total negative log likelihood
-    nll_array = (data_real - alpha*signal_real - beta*gammas*background_real)**2/data_var \
-                + (data_imag - alpha*signal_imag - beta*gammas*background_imag)**2/data_var \
-                + (background_real - beta*background_real - alpha*deltas*signal_real)**2/background_var \
-                + (background_imag - beta*background_imag - alpha*deltas*signal_imag)**2/background_var \
+    # get the required dimensions of the fit parameter arrays
+    num_datasets = data.shape[0]
+
+    # for unconditional mle alpha is the first element and others are offset by 1
+    offset = 0
+    if alpha is None:
+        alpha = x[0]
+        offset = 1
+
+    # get number of betas
+    num_betas = 1
+    if not single_beta:
+        num_betas = len(axes)*data.shape[2]
+
+    # extract beta and gamma aarrays from the input vector
+    beta = x[offset:offset+num_betas]
+    gammas = x[offset+num_betas:]
+
+    # reshape array of betas if more than one
+    if num_betas>1:
+        beta = beta.reshape(len(axes),-1)[np.newaxis,:,:]
+
+    # reshape array of gammas
+    gammas = gammas.reshape(-1,len(axes))
+
+    if spline:
+        times = np.arange(0,num_datasets,np.ceil(num_datasets/gammas.shape[0]))
+        cs = CubicSpline(times,gammas)
+        gammas = cs(np.arange(num_datasets))
+        gammas = gammas[...,np.newaxis]
+    else:
+        gammas = gammas.repeat(np.ceil(num_datasets/gammas.shape[0]),axis=0)[:num_datasets,:,np.newaxis]
+    
+    # reshape array of deltas
+    deltas = np.array(delta_means)[np.newaxis,:,np.newaxis]
+
+    # definition of the negative log likelihood
+    nll_array = (data_real - alpha*signal_real - beta*gammas*background_real)**2/(2*data_var) \
+              + (data_imag - alpha*signal_imag - beta*gammas*background_imag)**2/(2*data_var) \
+              + (background_real - beta*background_real - alpha*deltas*signal_real)**2/(2*background_var) \
+              + (background_imag - beta*background_imag - alpha*deltas*signal_imag)**2/(2*background_var) \
 
     return np.sum(nll_array)
 
 
-def unconditional_mle(agg_dict,delta_means=[0.1,0.1],lamb=1e-5,single_beta=False):
+def unconditional_mle(agg_dict,file_inds=None,lamb=1e-5,single_beta=False,\
+                      num_gammas=1,delta_means=[0.1,0.1],spline=False,axes=['x','y']):
     '''
     Maximize the likelihood function over both the signal and background
     parameters. Returns the unconditional maximum likelihood estimates for
@@ -433,16 +457,19 @@ def unconditional_mle(agg_dict,delta_means=[0.1,0.1],lamb=1e-5,single_beta=False
     if single_beta==False:
         num_betas = 2*(np.shape(agg_dict['qpd_ffts'])[-1])
     beta_bounds = ((0,2) for i in range(num_betas))
-    result = minimize(nll_with_background,[1e10]+[1]*num_betas+[1,1],\
-                      args=(agg_dict,None,delta_means,lamb),\
-                      bounds=((-1e16,1e16),*beta_bounds,(-1e3,1e3),(-1e3,1e3)),\
+    gamma_bounds = ((-1e3,1e3) for i in range(2*num_gammas))
+    result = minimize(nll_with_background,[1e10]+[1]*num_betas+[1,1]*num_gammas,\
+                      args=(agg_dict,file_inds,None,lamb,single_beta,num_gammas,\
+                            delta_means,spline,axes),\
+                      bounds=((-1e16,1e16),*beta_bounds,*gamma_bounds),\
                       tol=1e0,options={'maxfev':50000},method='Nelder-Mead')
     if result.success==False:
         print('Minimization failed!')
     return result
     
 
-def conditional_mle(agg_dict,delta_means=[0.1,0.1],lamb=1e-5,alpha=1e8,single_beta=False):
+def conditional_mle(agg_dict,file_inds=None,alpha=1e8,lamb=1e-5,single_beta=False,\
+                    num_gammas=1,delta_means=[0.1,0.1],spline=False,axes=['x','y']):
     '''
     Maximize the likelihood function over both the background only.
     Returns the conditional maximum likelihood estimate for beta.
@@ -451,95 +478,81 @@ def conditional_mle(agg_dict,delta_means=[0.1,0.1],lamb=1e-5,alpha=1e8,single_be
     if single_beta==False:
         num_betas = 2*(np.shape(agg_dict['qpd_ffts'])[-1])
     beta_bounds = ((0,2) for i in range(num_betas))
-    result = minimize(nll_with_background,[1]*num_betas+[1,1],\
-                      args=(agg_dict,None,delta_means,lamb,alpha),\
-                      bounds=(*beta_bounds,(-1e3,1e3),(-1e3,1e3)),\
-                      tol=1e0,options={'maxfev':5000},method='Nelder-Mead')
+    gamma_bounds = ((-1e3,1e3) for i in range(2*num_gammas))
+    result = minimize(nll_with_background,[1]*num_betas+[1,1]*num_gammas,\
+                      args=(agg_dict,file_inds,alpha,lamb,single_beta,num_gammas,\
+                            delta_means,spline,axes),\
+                      bounds=(*beta_bounds,*gamma_bounds),\
+                      tol=1e0,options={'maxfev':50000},method='Nelder-Mead')
     if result.success==False:
         print('Minimization failed!')
     return result
 
 
-def q_with_background(alpha,alpha_hat,uncond_nll,agg_dict,delta_means=[0.1,0.1],\
-                      lamb=1e-5,single_beta=False):
+def q_with_background(alpha,alpha_hat,uncond_nll,agg_dict,file_inds=None,\
+                      lamb=1e-5,**kwargs):
     '''
     Function to compute the profile likelihood ratio test statistic for an exclusion
     for a given value of alpha.
     '''
-    cond_res = conditional_mle(agg_dict,delta_means=delta_means,lamb=lamb,\
-                               alpha=alpha,single_beta=single_beta)
+    cond_res = conditional_mle(agg_dict,file_inds,alpha=alpha,lamb=lamb,**kwargs)
     cond_nll = cond_res.fun
 
     if np.abs(alpha)<np.abs(alpha_hat):
         q_alpha = 0
     else:
-        q_alpha = cond_nll - uncond_nll
+        q_alpha = 2.*(cond_nll - uncond_nll)
     
     return q_alpha
 
 
-def q_discovery(uncond_nll,agg_dict,delta_means=[0.1,0.1],lamb=1e-5,single_beta=False):
+def q_discovery(uncond_nll,agg_dict,file_inds=None,lamb=1e-5,**kwargs):
     '''
     Function to compute the profile likelihood ratio test statistic for a discovery
     for a given value of alpha.
     '''
-    cond_res = conditional_mle(agg_dict,delta_means=delta_means,\
-                               lamb=lamb,alpha=0,single_beta=single_beta)
+    cond_res = conditional_mle(agg_dict,file_inds,alpha=0,lamb=lamb,**kwargs)
     cond_nll = cond_res.fun
-    q_alpha = cond_nll - uncond_nll
+    q_alpha = 2.*(cond_nll - uncond_nll)
     
     return q_alpha
 
 
-def z_discovery(uncond_nll,agg_dict,delta_means=[0.1,0.1],lamb=1e-5,single_beta=False):
+def z_discovery(uncond_nll,agg_dict,file_inds=None,**kwargs):
     '''
     Return a z-score for a discovery.
     '''
-    q_disc = q_discovery(uncond_nll,agg_dict,delta_means,lamb,single_beta)
+    q_disc = q_discovery(uncond_nll,agg_dict,file_inds,**kwargs)
 
     return norm.ppf(chi2(1).cdf(q_disc))
 
 
-def plr_limit_func(alpha,alpha_hat,uncond_nll,agg_dict,delta_means=[0.1,0.1],\
-                   lamb=1e-5,cl=0.95,single_beta=False):
+def plr_limit_func(alpha,alpha_hat,uncond_nll,agg_dict,file_inds=None,\
+                   lamb=1e-5,cl=0.95,**kwargs):
     '''
     This function's root occurs at the alpha value corresponding to an exclusion at
     the specified confidence level.
     '''
     con_val = chi2(1).ppf(cl)*0.5
-    val = q_with_background(alpha,alpha_hat,uncond_nll,agg_dict,\
-                            delta_means=delta_means,lamb=lamb,single_beta=single_beta) - con_val
+    val = q_with_background(alpha,alpha_hat,uncond_nll,agg_dict,file_inds=file_inds,\
+                            lamb=lamb,**kwargs) - con_val
     
     return val
 
 
-def get_limit_with_background(agg_dict,delta_means=[0.1,0.1],lamb=1e-5,\
-                              cl=0.95,tol=1e-1,max_iters=3,single_beta=False):
-    '''
-    Find the value of alpha that is greater than 95 percent of the test statistic
-    distribution under the null hypothesis.
-    '''
-    uncond_res = unconditional_mle(agg_dict,delta_means=delta_means,lamb=lamb,single_beta=single_beta)
-    alpha_hat = uncond_res.x[0]
-    uncond_nll = uncond_res.fun
-    limit = plr_critical_value(alpha_hat,uncond_nll,agg_dict,delta_means,lamb,cl,tol,max_iters,single_beta)
-
-    return limit
-
-
-def plr_critical_value(alpha_hat,uncond_nll,agg_dict,delta_means,lamb,cl,\
-                       tol=1e-1,max_iters=3,single_beta=False):
+def plr_critical_value(alpha_hat,uncond_nll,agg_dict,file_inds=None,\
+                       lamb=1e-5,cl=0.95,tol=1e-1,max_iters=3,**kwargs):
     '''
     Custom root-finding function to get the value of alpha for a given confidence level.
     '''
     alpha_low = alpha_hat
-    alpha_high = 1.3*alpha_hat
+    alpha_high = 10*alpha_hat
     func_val = 2*tol
     iter = 0
     while np.abs(func_val)>tol:
         alpha = (alpha_low + alpha_high)/2.
-        func_val = plr_limit_func(alpha,alpha_hat,uncond_nll,agg_dict,\
-                                  delta_means,lamb,cl,single_beta)
+        func_val = plr_limit_func(alpha,alpha_hat,uncond_nll,agg_dict,file_inds,\
+                                  lamb=lamb,cl=cl,**kwargs)
         if func_val<0:
             alpha_low = alpha
         else:
@@ -551,13 +564,29 @@ def plr_critical_value(alpha_hat,uncond_nll,agg_dict,delta_means,lamb,cl,\
     return alpha
 
 
-def get_alpha_vs_lambda_background(agg_dict,delta_means,cl=0.95,tol=1e-1,\
-                                   max_iters=3,single_beta=False):
+def get_limit_with_background(agg_dict,file_inds=None,lamb=1e-5,cl=0.95,tol=1e-1,\
+                              max_iters=3,**kwargs):
+    '''
+    Find the value of alpha that is greater than 95 percent of the test statistic
+    distribution under the null hypothesis.
+    '''
+    uncond_res = unconditional_mle(agg_dict,file_inds=file_inds,lamb=lamb,**kwargs)
+    alpha_hat = uncond_res.x[0]
+    uncond_nll = uncond_res.fun
+    limit = plr_critical_value(alpha_hat,uncond_nll,agg_dict,file_inds,\
+                               lamb=lamb,cl=cl,tol=tol,max_iters=max_iters,**kwargs)
+
+    return limit
+
+
+def get_alpha_vs_lambda_background(agg_dict,file_inds=None,cl=0.95,tol=1e-1,max_iters=3,\
+                                   **kwargs):
     '''
     Get the 95% CL limit on alpha for the range of lambda values in agg_dict.
     '''
     lambdas = agg_dict['template_params'][0]
+    print('Computing the limit at each lambda in parallel...')
     limit = Parallel(n_jobs=len(lambdas))(delayed(get_limit_with_background)\
-                                          (agg_dict,delta_means,lam,cl,tol,max_iters,single_beta)\
-                                          for lam in tqdm(lambdas))
+                                          (agg_dict,file_inds,lamb,cl,tol,max_iters,**kwargs)\
+                                          for lamb in tqdm(lambdas))
     return np.array(limit)
