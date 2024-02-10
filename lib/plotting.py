@@ -213,8 +213,8 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None,plot_n
 
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     fig,ax = plt.subplots()
-    ax.semilogy(freqs,asd_x_raw,label='Naive $x$',color=colors[2],ls=':',alpha=0.5)
-    ax.semilogy(freqs,asd_y_raw,label='Naive $y$',color=colors[3],ls=':',alpha=0.5)
+    ax.semilogy(freqs,asd_x_raw,label='Naive $x$',color=colors[2],alpha=0.5)
+    ax.semilogy(freqs,asd_y_raw,label='Naive $y$',color=colors[3],alpha=0.5)
     if (p_x is not None) and (p_y is not None):
         ax.semilogy(freqs,lor(freqs,*p_x),label='Peak fit $x$',color=colors[2],alpha=0.8)
         ax.semilogy(freqs,lor(freqs,*p_y),label='Peak fit $y$',color=colors[3],alpha=0.8)
@@ -235,7 +235,7 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None,plot_n
 
 
 def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000,agg_dict=None,\
-                   resonance_drive_factors=[1.,1.,5.]):
+                   resonance_drive_factors=[1.,1.,1.],diagonalize_qpd=False):
     '''
     Plot the transfer functions and the fits for all axes.
 
@@ -246,8 +246,12 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000,agg_dict
     :resonance_drive_factors:   factor by which the driving force was scaled down near the resonance for [x,y,z]
     '''
 
+    if diagonalize_qpd and agg_dict is None:
+        print('Error: you must pass an agg_dict containing diagonalized data when using diagonalize_qpd=True')
+        return
+
     # get the transfer function file with fits
-    with h5py.File(path) as tf_file:
+    with h5py.File(path,'r') as tf_file:
         # get raw data from the processed file or the agg_dict argument
         if not phase and agg_dict is not None:
             tf_data = agg_dict[sensor.lower()+'_ffts_full'][:,:3,:]
@@ -267,28 +271,27 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000,agg_dict
             freqs = np.fft.rfftfreq(int(nsamp),d=1/fsamp)
             drive_ratios = np.ones_like(tf_freqs)
 
-        # set some basic parameters
-        reference_freq = 71.
-        axes = ['x','y','z']
-        drive_freq_ind = np.argmin(np.abs(tf_freqs[0,0,:]-reference_freq))
-
         # extract the transfer function matrix
         Harr = np.zeros((len(freqs), 3, 3), dtype=complex)
         Harr[:,0,0] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zXX'],tf_file['fits/'+sensor+'/pXX'], \
-                                         tf_file['fits/'+sensor+'/kXX']/tf_file.attrs['scaleFactors_'+sensor][0], 2*np.pi*freqs)[1]
+                                         tf_file['fits/'+sensor+'/kXX'],2*np.pi*freqs)[1]
         Harr[:,1,1] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zYY'],tf_file['fits/'+sensor+'/pYY'], \
-                                         tf_file['fits/'+sensor+'/kYY']/tf_file.attrs['scaleFactors_'+sensor][1], 2*np.pi*freqs)[1]
+                                         tf_file['fits/'+sensor+'/kYY'],2*np.pi*freqs)[1]
         Harr[:,2,2] = 1/signal.freqs_zpk(tf_file['fits/'+sensor+'/zZZ'],tf_file['fits/'+sensor+'/pZZ'], \
-                                         tf_file['fits/'+sensor+'/kZZ']/tf_file.attrs['scaleFactors_'+sensor][2], 2*np.pi*freqs)[1]
-        
-        # get force calibration factors
-        force_cal_factors = np.array([np.abs(Harr[drive_freq_ind,i,i]) for i in range(3)])
+                                         tf_file['fits/'+sensor+'/kZZ'],2*np.pi*freqs)[1]
 
-    # if agg_dict is passed, scale it to the correct units
+        # get the scale factor to calibrate counts to N
+        suffix = ''
+        if diagonalize_qpd:
+            suffix = '_diag'
+        force_cal_factors = np.array(tf_file.attrs['scaleFactors_QPD'+suffix])
+
+    # if agg_dict is passed, convert to N and divide by the low f value to scale to 1
+    low_f_inds = np.array([np.argmin(np.abs(tf_freqs-f)) for f in np.arange(10,100)])
     if agg_dict is not None:
         for i in range(3):
             tf_data[:,i,:] *= force_cal_factors[i]
-            tf_data[:,i,:] /= np.abs(tf_data[i,i,drive_freq_ind])
+            tf_data[:,i,:] /= np.mean(np.abs(tf_data[i,i,low_f_inds]))
     
     # get indices of frequencies driven during TF measurement
     tf_freq_inds = np.zeros_like(tf_freqs,dtype=int)
@@ -298,6 +301,7 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000,agg_dict
                 tf_freq_inds[i,j,k] = np.argmin(np.abs(freqs-tf_freqs[i,j,k]))
 
     # plot the result
+    axes = ['x','y','z']
     rows = 3
     if sensor=='PSPD':
         rows = 2
@@ -318,16 +322,16 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000,agg_dict
                 ax[i,j].semilogx(tf_freqs[j,i],np.angle(tf_data[j,i])*180./np.pi,linestyle='none',\
                                                         marker='o',ms=4,alpha=0.3,label='Measurement')
                 if i==j:
-                    ax[i,j].semilogx(freqs[tf_freq_inds[j,i]],np.angle(np.ones(len(tf_data[j,i]))\
-                                     /Harr[:,j,i][tf_freq_inds[j,i]])*180./np.pi,lw=2,label='Fit')
+                    ax[i,j].semilogx(freqs[tf_freq_inds[j,i]],np.angle(1/Harr[:,j,i][tf_freq_inds[j,i]])\
+                                     *180./np.pi,lw=2,label='Fit')
                 ax[i,j].set_ylim([-200,200])
                 ax[i,j].set_yticks([-180,-90,0,90,180])
             else:
                 ax[i,j].loglog(tf_freqs[j,i],np.abs(tf_data[j,i]*drive_ratios[j,i]),linestyle='none',\
                                marker='o',ms=4,alpha=0.3,label='Measurement')
                 if i==j:
-                    ax[i,j].loglog(freqs[tf_freq_inds[i,j]],force_cal_factors[i]*np.ones(len(tf_data[i,j]))\
-                                   /np.abs(Harr[:,i,j][tf_freq_inds[i,j]]),lw=2,label='Fit')
+                    ax[i,j].loglog(freqs[tf_freq_inds[i,j]],1/np.abs(Harr[:,i,j][tf_freq_inds[i,j]]),\
+                                   lw=2,label='Fit')
                     ax[i,j].text(1.5,1e-2,r'{{{:.3e}}} N/count'.format(force_cal_factors[i]),fontsize=14)
                 ax[i,j].set_ylim([5e-3,2e2])
                 ax[i,j].set_yticks(np.logspace(-2,2,5))

@@ -89,6 +89,7 @@ class FileData:
                                       (1.,-1.,1.,-1.),\
                                       (1.,-1.,-1.,1.),\
                                       (1.,1.,1.,1.)))
+        self.diagonalize_qpd = False
 
 
     def load_data(self,tf_path=None,cal_drive_freq=71.0,max_freq=2500.,num_harmonics=10,\
@@ -106,6 +107,7 @@ class FileData:
         self.get_laser_power()
         if qpd_diag_mat is not None:
             self.qpd_diag_mat = qpd_diag_mat
+            self.diagonalize_qpd = True
         self.get_xyz_from_quad()
         self.pspd_raw_data = self.data_dict['pspd_data']
         self.cant_raw_data = self.data_dict['cant_data']
@@ -205,17 +207,6 @@ class FileData:
 
         # save the mean transmitted power for this file
         self.mean_p_trans = np.mean(self.p_trans_full)
-
-
-    # def get_diag_mat(self):
-    #     '''
-    #     Read the config.yaml in the directory where the file is saved to get the matrix
-    #     which diagonalizes the QPD position response.
-    #     '''
-    #     config_path = '/'.join(self.file_name.split('/')[:-1])+'/config.yaml'
-    #     with open(config_path,'r') as infile:
-    #         config = yaml.safe_load(infile)
-    #     self.qpd_diag_mat = np.array(config['qpd_diag_mat'])
     
 
     def extract_quad(self):
@@ -468,19 +459,12 @@ class FileData:
             # for data from 2023 and later, the code will automatically find the transfer
             # function in the right format. For old data, specify the path manually
             if int(self.date) > 20230101 or sensor=='QPD':
-                Harr = self.tf_array_fitted(self.freqs,sensor,tf_path=tf_path)
+                Harr,force_cal_factors = self.tf_array_fitted(self.freqs,sensor,tf_path=tf_path,\
+                                                              diagonalize_qpd=self.diagonalize_qpd)
             else:
                 tf_path = '/data/new_trap_processed/calibrations/transfer_funcs/20200320.trans'
-                Harr = self.tf_array_interpolated(self.freqs,tf_path)
-
-            # force calibration factor at driven frequency
-            drive_freq_ind = np.argmin(np.abs(self.freqs - cal_drive_freq))
-            response_matrix = Harr[drive_freq_ind,:,:]
-            force_cal_factors = [0,0,0]
-            for i in [0,1,2]:
-                # assume the response is purely diagonal, and take from it the x, y, and z
-                # force calibration factors
-                force_cal_factors[i] = np.abs(response_matrix[i,i])
+                Harr,force_cal_factors = self.tf_array_interpolated(self.freqs,tf_path=tf_path,\
+                                                                    cal_drive_freq=cal_drive_freq)
 
         else:
             Harr = np.zeros((len(self.freqs), 3, 3))
@@ -528,7 +512,7 @@ class FileData:
             self.pspd_ffts_full = calibrated_fft*norm_factor
 
 
-    def tf_array_fitted(self,freqs,sensor,tf_path=None):
+    def tf_array_fitted(self,freqs,sensor,tf_path=None,diagonalize_qpd=False):
         '''
         Get the transfer function array from the hdf5 file containing the fitted poles,
         zeros, and gain from the measured transfer functions along x, y, and z, and returns it.
@@ -538,22 +522,27 @@ class FileData:
         if tf_path is None:
             tf_path = '/data/new_trap_processed/calibrations/transfer_funcs/'+str(self.date)+'/TF.h5'
 
-        with h5py.File(tf_path,'r') as tf_file:
-            ### Compute TF at frequencies of interest. Appropriately inverts
-            ### so we can map response -> drive
-            Harr = np.zeros((len(freqs), 3, 3), dtype=complex)
-            Harr[:,0,0] = 1/sig.freqs_zpk(tf_file['fits/'+sensor+'/zXX'], tf_file['fits/'+sensor+'/pXX'], \
-                                          tf_file['fits/'+sensor+'/kXX']/tf_file.attrs['scaleFactors_'+sensor][0], 2*np.pi*freqs)[1]
-            Harr[:,1,1] = 1/sig.freqs_zpk(tf_file['fits/'+sensor+'/zYY'], tf_file['fits/'+sensor+'/pYY'], \
-                                          tf_file['fits/'+sensor+'/kYY']/tf_file.attrs['scaleFactors_'+sensor][1], 2*np.pi*freqs)[1]
-            Harr[:,2,2] = 1/sig.freqs_zpk(tf_file['fits/'+sensor+'/zZZ'], tf_file['fits/'+sensor+'/pZZ'], \
-                                          tf_file['fits/'+sensor+'/kZZ']/tf_file.attrs['scaleFactors_'+sensor][2], 2*np.pi*freqs)[1]
-            tf_file.close()
+        # select the right calibration factor if diagonalizing the QPD
+        suffix = ''
+        if diagonalize_qpd and sensor=='QPD':
+            suffix = '_diag'
 
-        return Harr
+        with h5py.File(tf_path,'r') as tf_file:
+            # Compute TF at frequencies of interest. Appropriately inverts
+            # so we can map response -> drive
+            Harr = np.zeros((len(freqs), 3, 3), dtype=complex)
+            Harr[:,0,0] = 1/sig.freqs_zpk(tf_file['fits/'+sensor+'/zXX'],tf_file['fits/'+sensor+'/pXX'], \
+                                          tf_file['fits/'+sensor+'/kXX']/tf_file.attrs['scaleFactors_'+sensor][0], 2*np.pi*freqs)[1]
+            Harr[:,1,1] = 1/sig.freqs_zpk(tf_file['fits/'+sensor+'/zYY'],tf_file['fits/'+sensor+'/pYY'], \
+                                          tf_file['fits/'+sensor+'/kYY']/tf_file.attrs['scaleFactors_'+sensor][1], 2*np.pi*freqs)[1]
+            Harr[:,2,2] = 1/sig.freqs_zpk(tf_file['fits/'+sensor+'/zZZ'],tf_file['fits/'+sensor+'/pZZ'], \
+                                          tf_file['fits/'+sensor+'/kZZ']/tf_file.attrs['scaleFactors_'+sensor][2], 2*np.pi*freqs)[1]
+            force_cal_factors = np.array(tf_file.attrs['scaleFactors_'+sensor+suffix])
+
+        return Harr,force_cal_factors
     
 
-    def tf_array_interpolated(self,freqs,tf_path=None,suppress_off_diag=False):
+    def tf_array_interpolated(self,freqs,tf_path=None,cal_drive_freq=71.,suppress_off_diag=False):
         '''
         Extracts the interpolated transfer function array from a .trans file and returns it.
         '''
@@ -626,7 +615,16 @@ class FileData:
                         continue
                     Hout[:,drive,resp] = 0.0 + 0.0j
 
-        return Hout
+        # force calibration factor at driven frequency
+        drive_freq_ind = np.argmin(np.abs(self.freqs - cal_drive_freq))
+        response_matrix = Hout[drive_freq_ind,:,:]
+        force_cal_factors = [0,0,0]
+        for i in [0,1,2]:
+            # assume the response is purely diagonal, and take from it the x, y, and z
+            # force calibration factors
+            force_cal_factors[i] = np.abs(response_matrix[i,i])
+
+        return Hout,force_cal_factors
     
 
     def build_drive_mask(self, cant_fft, freqs, num_harmonics=10, width=0, harms=[], cant_drive_freq=3.0):
@@ -1587,6 +1585,7 @@ class AggregateData:
             print('Error: peak fitting failed!')
             max_ind_x = np.argmin(np.abs(freqs-peak_guess[0]))
             max_ind_y = np.argmin(np.abs(freqs-peak_guess[1]))
+        max_ind_n = np.argmin(np.abs(freqs-2000.))
 
         # get the raw data from each quadrant
         raw_qpd_1 = np.array(self.agg_dict['quad_amps'][fit_inds][:,0,:],dtype=np.float64)
@@ -1625,7 +1624,7 @@ class AggregateData:
             ax[1].set_xlabel('Frequency [Hz]')
             ax[1].set_xlim([min(freq_ranges)-20,max(freq_ranges)+20])
             ax[0].set_ylabel('ASD [1/$\sqrt{\mathrm{Hz}}$]')
-            ax[0].set_ylim([1e-7,1e-3 ])
+            ax[0].set_ylim([1e-6,1e-3 ])
             ax[1].set_ylabel('Phase [degrees]')
             ax[1].set_ylim([-200,200])
             ax[1].set_yticks([-180,0,180])
@@ -1644,49 +1643,57 @@ class AggregateData:
         qpd_2y = np.mean(fft_qpd_2[max_ind_y-df:max_ind_y+df])
         qpd_3y = np.mean(fft_qpd_3[max_ind_y-df:max_ind_y+df])
         qpd_4y = np.mean(fft_qpd_4[max_ind_y-df:max_ind_y+df])
+        qpd_1n = np.mean(fft_qpd_1[max_ind_n-df:max_ind_n+df])
+        qpd_2n = np.mean(fft_qpd_2[max_ind_n-df:max_ind_n+df])
+        qpd_3n = np.mean(fft_qpd_3[max_ind_n-df:max_ind_n+df])
+        qpd_4n = np.mean(fft_qpd_4[max_ind_n-df:max_ind_n+df])
 
         # 4x2 matrix, rows are quadrants and columns are f_x and f_y
         signal_mat = np.array(((qpd_1x,qpd_1y),
                                (qpd_2x,qpd_2y),
                                (qpd_3x,qpd_3y),
-                               (qpd_4x,qpd_4y)),dtype=np.complex128)
-        
-        # compute the left inverse, which gives the transformation to pure x and y
-        mode_vecs = np.linalg.solve(signal_mat.T.dot(signal_mat),signal_mat.T)
-        
-        # scale the result so that the total amplitude in each peak is the same afterward
-        naive_mat = np.array(((1.,1.,-1.,-1.),\
-                              (1.,-1.,1.,-1.)),dtype=np.complex128)
-        total_naive = np.sum(np.abs(np.matmul(naive_mat,signal_mat)),axis=0)
-        total_diag = np.sum(np.abs(np.matmul(mode_vecs,signal_mat)),axis=0)
-        scale_facs = total_naive/total_diag
+                               (qpd_4x,qpd_4y)))
 
-        # for simplicity drop the imaginary parts. Power should be negligible,
-        # but check anyway
+        # for simplicity drop the imaginary parts. Power should be negligible, but check anyway
         print('Fraction of power in imaginary parts to be discarded:')
-        print('x->x: {:.3f}, x->y: {:.3f}, y->x: {:.3f}, y->y: {:.3f}'\
-              .format(*np.square(np.imag(mode_vecs)/np.abs(mode_vecs)).flatten()))
-        mode_vecs = scale_facs[:,np.newaxis]*np.real(mode_vecs)
+        print('Q1: {:.3f}, Q2: {:.3f}, Q3: {:.3f}, Q4: {:.3f}'\
+              .format(*np.square(np.imag(signal_mat)/np.abs(signal_mat)).flatten()))
+        signal_mat = np.real(signal_mat)
+
+        # compute the left inverse, which gives the transformation to pure x and y, then normalize
+        mode_vecs = np.linalg.solve(signal_mat.T.dot(signal_mat),signal_mat.T)
+        mode_vecs /= np.linalg.norm(mode_vecs)
 
         # find the null vectors, which we expect to span the scattered-light-only space
-        light_vecs = null_space(mode_vecs)
-        
-        # u = np.real(np.linalg.inv(u))[2:4,:]
-        diag_mat = np.vstack([mode_vecs,light_vecs.T])
+        light_vecs = null_space(mode_vecs).T
+
+        # make the full transformation matrix
+        diag_mat = np.vstack([mode_vecs,light_vecs])
+
+        # scale the result to try to keep the amplitude comparable before and after
+        naive_mat = np.array(((1.,1.,-1.,-1.),\
+                              (1.,-1.,1.,-1.),\
+                              (1.,-1.,-1.,1.),\
+                              (0,0,0,0)))
+        signal_null = np.array(((qpd_1n,qpd_1n),
+                                (qpd_2n,qpd_2n),
+                                (qpd_3n,qpd_3n),
+                                (qpd_4n,qpd_4n)))
+        signal_null = np.real(signal_null)
+        signal_full = np.hstack((signal_mat,signal_null))
+        total_naive = np.sqrt(np.sum(np.abs(np.matmul(naive_mat,signal_full))**2,axis=0))
+        total_diag = np.sqrt(np.sum(np.abs(np.matmul(diag_mat,signal_full))**2,axis=0))
+        scale_fac = np.mean(total_naive/total_diag)
+        diag_mat = scale_fac*diag_mat
 
         if plot:
             cross_coupling(self.agg_dict,diag_mat,p_x=p_x,p_y=p_y,plot_inds=fit_inds,plot_null=True)
-            xy_on_qpd(diag_mat)
+            visual_diag_mat(diag_mat)
 
-        if np.prod(np.sign(diag_mat[:,:2]))!=-1:
-            print('Warning: both rows correspond to the same physical mode!')
-            print(diag_mat)
-
-        print('Diagonalization successful!')
+        print('Diagonalization complete!')
         print('Copy the following into the config.yaml files for the relevant datasets:')
-        print('qpd_diag_mat: [[{:.8f},{:.8f},{:.8f},{:.8f}],[{:.8f},{:.8f},{:.8f},{:.8f}],'\
-              +'[{:.8f},{:.8f},{:.8f},{:.8f}]]'.format(*[i for i in diag_mat.flatten()]))
-
+        print('qpd_diag_mat: [[{:.8f},{:.8f},{:.8f},{:.8f}],[{:.8f},{:.8f},{:.8f},{:.8f}],[{:.8f},{:.8f},{:.8f},{:.8f}],[{:.8f},{:.8f},{:.8f},{:.8f}]]'\
+              .format(*[i for i in diag_mat.flatten()]))
         return diag_mat
 
 
