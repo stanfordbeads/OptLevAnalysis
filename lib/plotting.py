@@ -235,7 +235,7 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None,plot_n
 
 
 def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000,agg_dict=None,\
-                   resonance_drive_factors=[1.,1.,1.],diagonalize_qpd=False):
+                   resonance_drive_factors=[1.,1.,1.],diagonalize_qpd=False,plot_null=False):
     '''
     Plot the transfer functions and the fits for all axes.
 
@@ -246,8 +246,8 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000,agg_dict
     :resonance_drive_factors:   factor by which the driving force was scaled down near the resonance for [x,y,z]
     '''
 
-    if diagonalize_qpd and agg_dict is None:
-        print('Error: you must pass an agg_dict containing diagonalized data when using diagonalize_qpd=True')
+    if (diagonalize_qpd or plot_null) and agg_dict is None:
+        print('Error: you must pass an agg_dict when using diagonalize_qpd or plot_null')
         return
 
     # get the transfer function file with fits
@@ -255,6 +255,8 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000,agg_dict
         # get raw data from the processed file or the agg_dict argument
         if not phase and agg_dict is not None:
             tf_data = agg_dict[sensor.lower()+'_ffts_full'][:,:3,:]
+            if plot_null:
+                tf_data[:,2,:] = agg_dict[sensor.lower()+'_ffts_full'][:,3,:]
             freqs = agg_dict['freqs']
             tf_freqs = np.arange(1,700,1)
             tf_freq_inds = np.array([np.argmin(np.abs(freqs - f)) for f in tf_freqs])
@@ -286,12 +288,18 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000,agg_dict
             suffix = '_diag'
         force_cal_factors = np.array(tf_file.attrs['scaleFactors_QPD'+suffix])
 
-    # if agg_dict is passed, convert to N and divide by the low f value to scale to 1
+    # if agg_dict is passed, convert to N and divide by the response at low f to scale to 1
     low_f_inds = np.array([np.argmin(np.abs(tf_freqs-f)) for f in np.arange(10,100)])
     if agg_dict is not None:
         for i in range(3):
             tf_data[:,i,:] *= force_cal_factors[i]
             tf_data[:,i,:] /= np.mean(np.abs(tf_data[i,i,low_f_inds]))
+
+    # if we're plotting the response in the null, it's hard to assign physical units
+    # instead we scale it so the noise floor matches that of the driven axis
+    if plot_null:
+        for i in range(2):
+            tf_data[i,2,:] *= np.mean(tf_data[i,i,low_f_inds+15])/np.mean(tf_data[i,i,low_f_inds])
     
     # get indices of frequencies driven during TF measurement
     tf_freq_inds = np.zeros_like(tf_freqs,dtype=int)
@@ -301,22 +309,26 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000,agg_dict
                 tf_freq_inds[i,j,k] = np.argmin(np.abs(freqs-tf_freqs[i,j,k]))
 
     # plot the result
-    axes = ['x','y','z']
+    axes = ['$x$','$y$','$z$']
+    columns = 3
+    if plot_null:
+        axes[2] = 'null'
+        columns = 2
     rows = 3
     if sensor=='PSPD':
         rows = 2
     title = 'magnitudes'
     if phase:
         title = 'phases'
-    fig,ax = plt.subplots(rows,3,figsize=(12,2*rows+4),sharex=True,sharey=True)
+    fig,ax = plt.subplots(rows,columns,figsize=(3*columns+3,2*rows+4),sharex=True,sharey=True)
     fig.suptitle('Transfer function '+title+' for the '+sensor,fontsize=24)
     for i in range(rows):
         if phase:
             ax[i,0].set_ylabel('Phase [$^\circ$]')
         else:
-            ax[i,0].set_ylabel('Mag [N/N]')
-        for j in range(3):
-            ax[0,j].set_title('Drive $'+axes[j]+'$')
+            ax[i,0].set_ylabel('Mag. '+axes[i]+' [N/N]')
+        for j in range(columns):
+            ax[0,j].set_title('Drive '+axes[j])
             ax[-1,j].set_xlabel('Frequency [Hz]')
             if phase:
                 ax[i,j].semilogx(tf_freqs[j,i],np.angle(tf_data[j,i])*180./np.pi,linestyle='none',\
@@ -336,7 +348,8 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000,agg_dict
                 ax[i,j].set_ylim([5e-3,2e2])
                 ax[i,j].set_yticks(np.logspace(-2,2,5))
             ax[i,j].grid(which='both')
-        ax[i,i].legend(loc='upper left',fontsize=10)
+        if i<rows and i<columns:
+            ax[i,i].legend(loc='upper left',fontsize=10)
 
     return fig,ax
 
