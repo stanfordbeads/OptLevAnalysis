@@ -4,6 +4,7 @@ from scipy.stats import chi2,norm
 from scipy.interpolate import CubicSpline
 from joblib import Parallel, delayed
 from tqdm import tqdm
+from numba import jit
 from funcs import *
 
 # ************************************************************************ #
@@ -355,6 +356,59 @@ def get_alpha_scale(likelihood_coeffs,lambdas):
     return 10**np.array((median,lower_1s,upper_1s))
 
 
+def reshape_nll_args(x,data_shape,alpha,single_beta=False,num_gammas=1,delta_means=[0.1,0.1],\
+                     spline=False,axes=['x','y']):
+    '''
+    Read the arguments from the dictionary and reshape them into the correctly-shaped
+    numpy arrays.
+    '''
+
+    num_datasets = data_shape[0]
+
+    # choose which axes to include
+    first_axis = 0
+    second_axis = 2
+    if 'x' not in axes:
+        first_axis = 1
+    if 'y' not in axes:
+        second_axis = 1
+
+    # for unconditional mle alpha is the first element and others are offset by 1
+    offset = 0
+    if alpha is None:
+        alpha = x[0]
+        offset = 1
+
+    # get number of betas
+    num_betas = 1
+    if not single_beta:
+        num_betas = data_shape[2]
+
+    # extract beta and gamma aarrays from the input vector
+    beta = x[offset:offset+num_betas]
+    gammas = x[offset+num_betas:]
+
+    # reshape array of betas if more than one
+    if num_betas>1:
+        beta = beta[np.newaxis,np.newaxis,:]
+
+    # reshape array of gammas
+    gammas = gammas.reshape(-1,len(axes))
+
+    if spline:
+        times = np.arange(0,num_datasets,np.ceil(num_datasets/gammas.shape[0]))
+        cs = CubicSpline(times,gammas)
+        gammas = cs(np.arange(num_datasets))
+        gammas = gammas[...,np.newaxis]
+    else:
+        gammas = gammas.repeat(np.ceil(num_datasets/gammas.shape[0]),axis=0)[:num_datasets,:,np.newaxis]
+    
+    # reshape array of deltas
+    deltas = np.array(delta_means)[np.newaxis,first_axis:second_axis,np.newaxis]
+
+    return alpha,beta,gammas,deltas
+
+
 def nll_with_background(x,agg_dict,file_inds=None,alpha=None,lamb=1e-5,single_beta=False,\
                         num_gammas=1,delta_means=[0.1,0.1],spline=False,axes=['x','y']):
     '''
@@ -387,7 +441,7 @@ def nll_with_background(x,agg_dict,file_inds=None,alpha=None,lamb=1e-5,single_be
     background = qpd_ffts[:,3,np.newaxis,:]
     background_real = np.real(background)
     background_imag = np.imag(background)
-    background_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,3,np.newaxis,...]
+    background_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,3,:]
     background_var = (1./(2.*num_sb))*np.sum(np.real(background_sb_ffts)**2+np.imag(background_sb_ffts)**2,axis=-1)
 
     # get the measurements for each file/axis/harm
@@ -401,49 +455,89 @@ def nll_with_background(x,agg_dict,file_inds=None,alpha=None,lamb=1e-5,single_be
     signal_real = np.real(yuk_ffts[:,first_axis:second_axis,:])
     signal_imag = np.imag(yuk_ffts[:,first_axis:second_axis,:])
 
-    # get the required dimensions of the fit parameter arrays
-    num_datasets = data.shape[0]
+    # all parameter arrays should be put in the shape (files,axes,harmonics)
+    alpha,beta,gammas,deltas = reshape_nll_args(x,data.shape,alpha,single_beta,num_gammas,delta_means,spline,axes)
 
-    # for unconditional mle alpha is the first element and others are offset by 1
-    offset = 0
-    if alpha is None:
-        alpha = x[0]
-        offset = 1
+    # the background channel NLL is defined for only a single background axis, so before summing has shape (files,harmonics)
+    nll_background = (background_real[:,0,:] - beta*background_real[:,0,:] - alpha*np.sum(deltas*signal_real,axis=1))**2/(2*background_var) \
+                   + (background_imag[:,0,:] - beta*background_imag[:,0,:] - alpha*np.sum(deltas*signal_imag,axis=1))**2/(2*background_var)
 
-    # get number of betas
-    num_betas = 1
-    if not single_beta:
-        num_betas = len(axes)*data.shape[2]
-
-    # extract beta and gamma aarrays from the input vector
-    beta = x[offset:offset+num_betas]
-    gammas = x[offset+num_betas:]
-
-    # reshape array of betas if more than one
-    if num_betas>1:
-        beta = beta.reshape(len(axes),-1)[np.newaxis,:,:]
-
-    # reshape array of gammas
-    gammas = gammas.reshape(-1,len(axes))
-
-    if spline:
-        times = np.arange(0,num_datasets,np.ceil(num_datasets/gammas.shape[0]))
-        cs = CubicSpline(times,gammas)
-        gammas = cs(np.arange(num_datasets))
-        gammas = gammas[...,np.newaxis]
-    else:
-        gammas = gammas.repeat(np.ceil(num_datasets/gammas.shape[0]),axis=0)[:num_datasets,:,np.newaxis]
+    # the signal channel NLL has a shape before summing of (files,axes,harmonics)
+    nll_signal = (data_real - alpha*signal_real - beta*gammas*background_real)**2/(2*data_var) \
+               + (data_imag - alpha*signal_imag - beta*gammas*background_imag)**2/(2*data_var)
     
-    # reshape array of deltas
-    deltas = np.array(delta_means)[np.newaxis,:,np.newaxis]
+    return np.sum(nll_background) + np.sum(nll_signal)
 
-    # definition of the negative log likelihood
-    nll_array = (data_real - alpha*signal_real - beta*gammas*background_real)**2/(2*data_var) \
-              + (data_imag - alpha*signal_imag - beta*gammas*background_imag)**2/(2*data_var) \
-              + (background_real - beta*background_real - alpha*deltas*signal_real)**2/(2*background_var) \
-              + (background_imag - beta*background_imag - alpha*deltas*signal_imag)**2/(2*background_var) \
 
-    return np.sum(nll_array)
+def nll_tester(x,agg_dict,file_inds=None,alpha=None,lamb=1e-5,single_beta=False,\
+               num_gammas=1,delta_means=[0.1,0.1],spline=False,axes=['x','y']):
+    '''
+    Check dimensions of all terms that go into the likelihood function to ensure the
+    data is being unpacked correctly.
+    '''
+
+    if file_inds is None:
+        file_inds = np.array(range(agg_dict['times'].shape[0]))
+
+    # choose which axes to include
+    first_axis = 0
+    second_axis = 2
+    if 'x' not in axes:
+        first_axis = 1
+    if 'y' not in axes:
+        second_axis = 1
+
+    # work with a single value of lambda
+    lambdas = agg_dict['template_params'][0]
+    lambda_ind = np.argmin(np.abs(lambdas-lamb))
+    
+    # extract the data for these datasets
+    yuk_ffts = agg_dict['template_ffts'][file_inds,lambda_ind,...]
+    qpd_ffts = agg_dict['qpd_ffts'][file_inds]
+    qpd_sb_ffts = agg_dict['qpd_sb_ffts'][file_inds]
+    num_sb = int(qpd_sb_ffts.shape[2]/qpd_ffts.shape[2])
+
+    # get the background measurements
+    background = qpd_ffts[:,3,np.newaxis,:]
+    background_real = np.real(background)
+    background_imag = np.imag(background)
+    background_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,3,:]
+    background_var = (1./(2.*num_sb))*np.sum(np.real(background_sb_ffts)**2+np.imag(background_sb_ffts)**2,axis=-1)
+
+    # get the measurements for each file/axis/harm
+    data = qpd_ffts[:,first_axis:second_axis,:]
+    data_real = np.real(data)
+    data_imag = np.imag(data)
+    data_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,first_axis:second_axis,...]
+    data_var = (1./(2.*num_sb))*np.sum(np.real(data_sb_ffts)**2+np.imag(data_sb_ffts)**2,axis=-1)
+
+    # get the templates for each file/axis/harm
+    signal_real = np.real(yuk_ffts[:,first_axis:second_axis,:])
+    signal_imag = np.imag(yuk_ffts[:,first_axis:second_axis,:])
+
+    # all parameter arrays should be put in the shape (files,axes,harmonics)
+    alpha,beta,gammas,deltas = reshape_nll_args(x,data.shape,alpha,single_beta,num_gammas,delta_means,spline,axes)
+
+    print('Shapes of likelihood parameters and data:')
+    print('-----------------------------------------')
+    print('Alpha:\t\t',alpha.shape)
+    print('Beta:\t\t',beta.shape)
+    print('Gamma:\t\t',gammas.shape)
+    print('Delta:\t\t',deltas.shape)
+    print('Signal:\t\t',data_real.shape)
+    print('Signal var:\t',data_var.shape)
+    print('Background:\t', background_real.shape)
+    print('Background var:\t',background_var.shape)
+    print('\nValues of likelihood parameters and data:')
+    print('-----------------------------------------')
+    print('Alpha:\t\t',alpha)
+    print('Beta:\t\t',beta)
+    print('Gamma:\t\t',gammas[0])
+    print('Delta:\t\t',deltas)
+    print('Signal:\t\t',data_real[0])
+    print('Signal var:\t',data_var[0])
+    print('Background:\t', background_real[0])
+    print('Background var:\t',background_var[0])
 
 
 def unconditional_mle(agg_dict,file_inds=None,lamb=1e-5,single_beta=False,\
@@ -455,14 +549,14 @@ def unconditional_mle(agg_dict,file_inds=None,lamb=1e-5,single_beta=False,\
     '''
     num_betas = 1
     if single_beta==False:
-        num_betas = 2*(np.shape(agg_dict['qpd_ffts'])[-1])
-    beta_bounds = ((0,2) for i in range(num_betas))
-    gamma_bounds = ((-1e3,1e3) for i in range(2*num_gammas))
-    result = minimize(nll_with_background,[1e10]+[1]*num_betas+[1,1]*num_gammas,\
+        num_betas = (np.shape(agg_dict['qpd_ffts'])[-1])
+    beta_bounds = ((-10,10) for i in range(num_betas))
+    gamma_bounds = ((-1e3,1e3) for i in range(len(axes)*num_gammas))
+    result = minimize(nll_with_background,[1e10]+[1]*num_betas+[1]*len(axes)*num_gammas,\
                       args=(agg_dict,file_inds,None,lamb,single_beta,num_gammas,\
                             delta_means,spline,axes),\
                       bounds=((-1e16,1e16),*beta_bounds,*gamma_bounds),\
-                      tol=1e0,options={'maxfev':50000},method='Nelder-Mead')
+                      options={'maxfev':1000000,'fatol':1e0},method='Nelder-Mead')
     if result.success==False:
         print('Minimization failed!')
     return result
@@ -476,20 +570,20 @@ def conditional_mle(agg_dict,file_inds=None,alpha=1e8,lamb=1e-5,single_beta=Fals
     '''
     num_betas = 1
     if single_beta==False:
-        num_betas = 2*(np.shape(agg_dict['qpd_ffts'])[-1])
-    beta_bounds = ((0,2) for i in range(num_betas))
-    gamma_bounds = ((-1e3,1e3) for i in range(2*num_gammas))
-    result = minimize(nll_with_background,[1]*num_betas+[1,1]*num_gammas,\
+        num_betas = (np.shape(agg_dict['qpd_ffts'])[-1])
+    beta_bounds = ((-10,10) for i in range(num_betas))
+    gamma_bounds = ((-1e3,1e3) for i in range(len(axes)*num_gammas))
+    result = minimize(nll_with_background,[1]*num_betas+[1]*len(axes)*num_gammas,\
                       args=(agg_dict,file_inds,alpha,lamb,single_beta,num_gammas,\
                             delta_means,spline,axes),\
                       bounds=(*beta_bounds,*gamma_bounds),\
-                      tol=1e0,options={'maxfev':50000},method='Nelder-Mead')
+                      options={'maxfev':1000000,'fatol':1e0},method='Nelder-Mead')
     if result.success==False:
         print('Minimization failed!')
     return result
 
 
-def q_with_background(alpha,alpha_hat,uncond_nll,agg_dict,file_inds=None,\
+def q_with_background(alpha,uncond_nll,agg_dict,file_inds=None,\
                       lamb=1e-5,**kwargs):
     '''
     Function to compute the profile likelihood ratio test statistic for an exclusion
@@ -497,34 +591,17 @@ def q_with_background(alpha,alpha_hat,uncond_nll,agg_dict,file_inds=None,\
     '''
     cond_res = conditional_mle(agg_dict,file_inds,alpha=alpha,lamb=lamb,**kwargs)
     cond_nll = cond_res.fun
-
-    if np.abs(alpha)<np.abs(alpha_hat):
-        q_alpha = 0
-    else:
-        q_alpha = 2.*(cond_nll - uncond_nll)
-    
-    return q_alpha
-
-
-def q_discovery(uncond_nll,agg_dict,file_inds=None,lamb=1e-5,**kwargs):
-    '''
-    Function to compute the profile likelihood ratio test statistic for a discovery
-    for a given value of alpha.
-    '''
-    cond_res = conditional_mle(agg_dict,file_inds,alpha=0,lamb=lamb,**kwargs)
-    cond_nll = cond_res.fun
     q_alpha = 2.*(cond_nll - uncond_nll)
     
     return q_alpha
 
 
-def z_discovery(uncond_nll,agg_dict,file_inds=None,**kwargs):
+def z_discovery(q_disc):
     '''
     Return a z-score for a discovery.
     '''
-    q_disc = q_discovery(uncond_nll,agg_dict,file_inds,**kwargs)
 
-    return norm.ppf(chi2(1).cdf(q_disc))
+    return 2.*norm.ppf(chi2(1).cdf(q_disc))
 
 
 def plr_limit_func(alpha,alpha_hat,uncond_nll,agg_dict,file_inds=None,\
@@ -579,14 +656,66 @@ def get_limit_with_background(agg_dict,file_inds=None,lamb=1e-5,cl=0.95,tol=1e-1
     return limit
 
 
-def get_alpha_vs_lambda_background(agg_dict,file_inds=None,cl=0.95,tol=1e-1,max_iters=3,\
-                                   **kwargs):
+def get_alpha_vs_lambda_background(agg_dict,file_inds=None,cl=0.95,num_points=40,**kwargs):
     '''
     Get the 95% CL limit on alpha for the range of lambda values in agg_dict.
     '''
     lambdas = agg_dict['template_params'][0]
     print('Computing the limit at each lambda in parallel...')
-    limit = Parallel(n_jobs=len(lambdas))(delayed(get_limit_with_background)\
-                                          (agg_dict,file_inds,lamb,cl,tol,max_iters,**kwargs)\
+    limit = Parallel(n_jobs=len(lambdas))(delayed(get_limit_from_q_parabola)\
+                                          (agg_dict,file_inds,lamb,cl,num_points,False,**kwargs)\
                                           for lamb in tqdm(lambdas))
+    
     return np.array(limit)
+
+
+def q_vs_alpha(alpha_hat,uncond_nll,agg_dict,file_inds=None,lamb=1e-5,num_points=40,**kwargs):
+    '''
+    Plot the test statistic as a function of alpha.
+    '''
+
+    alphas = np.sort(np.append(np.linspace(-alpha_hat,10*alpha_hat,num_points),alpha_hat))
+    q_vals = Parallel(n_jobs=len(alphas))(delayed(q_with_background)\
+                                          (alpha,uncond_nll,agg_dict,\
+                                           file_inds,lamb,**kwargs)\
+                                           for alpha in alphas)
+    
+    # the test statistic should have a minimum at (alpha_hat,0). If it dips negative it's due
+    # to errors in the fitting, so set it back to zero
+    q_vals = np.array(q_vals) - np.amin(q_vals)
+    
+    return alphas,q_vals
+
+
+def get_limit_from_q_parabola(agg_dict,file_inds=None,lamb=1e-5,cl=0.95,num_points=40,\
+                              return_q0=True,**kwargs):
+    '''
+    The minimization is noisy and is susceptible to fluctuations if parameters are not
+    chosen carefully. This function instead fits a parabola to the alpha curve and
+    determines the limit from the parabola.
+    '''
+
+    # threshold test statistic for a given confidence level, from Wilks' theorem
+    con_val = chi2(1).ppf(cl)*0.5
+
+    # compute the test statistic for a range of alphas
+    uncond_res = unconditional_mle(agg_dict,file_inds=file_inds,lamb=lamb,**kwargs)
+    alpha_hat = uncond_res.x[0]
+    uncond_nll = uncond_res.fun
+    alphas,q_vals = q_vs_alpha(alpha_hat,uncond_nll,agg_dict,file_inds,lamb,num_points,**kwargs)
+
+    # fit a parabola with a minimum at (alpha_hat,0) which has one free parameter
+    # q = a * (alpha - alpha_hat)^2
+    # analytic solution to the least-squares fitting
+    a_hat = np.sum(q_vals*(alphas-alpha_hat)**2)/np.sum((alphas-alpha_hat)**4)
+
+    # value at which the parabola crosses the CL threshold
+    alpha_lim = alpha_hat + np.sign(alpha_hat)*np.sqrt(con_val/a_hat)
+
+    # value of the test statistic at alpha=0
+    q_zero = a_hat*alpha_hat**2
+
+    if return_q0:
+        return alpha_lim,q_zero
+    else:
+        return alpha_lim
