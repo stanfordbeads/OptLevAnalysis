@@ -1,7 +1,9 @@
 import numpy as np
 from scipy.optimize import minimize
+import iminuit.minimize as iminimize
 from scipy.stats import chi2,norm
 from scipy.interpolate import CubicSpline
+from iminuit import cost,Minuit
 from joblib import Parallel, delayed
 from tqdm import tqdm
 from numba import jit
@@ -390,9 +392,8 @@ def reshape_nll_args(x,data_shape,alpha,single_beta=False,num_gammas=1,delta_mea
     beta = betas_split[0::2] + 1j*betas_split[1::2]
     gammas = x[offset+2*num_betas:]
 
-    # reshape array of betas if more than one
-    if num_betas>1:
-        beta = beta[np.newaxis,np.newaxis,:]
+    # # reshape array of betas
+    beta = beta[np.newaxis,np.newaxis,:]
 
     # reshape array of gammas
     gammas = gammas.reshape(-1,len(axes))
@@ -554,11 +555,11 @@ def unconditional_mle(agg_dict,file_inds=None,lamb=1e-5,single_beta=False,\
     beta_bounds = ((-10,10) for i in range(2*num_betas))
     gamma_bounds = ((-1e3,1e3) for i in range(len(axes)*num_gammas))
     alpha_bound = 1e10*np.exp(2e-5/lamb)
-    result = minimize(nll_with_background,[1e9]+[1,0]*num_betas+[1]*len(axes)*num_gammas,\
+    result = iminimize(nll_with_background,[1e9]+[1,0]*num_betas+[1]*len(axes)*num_gammas,\
                       args=(agg_dict,file_inds,None,lamb,single_beta,num_gammas,\
                             delta_means,spline,axes),\
                       bounds=((-alpha_bound,alpha_bound),*beta_bounds,*gamma_bounds),\
-                      options={'maxfev':1000000,'xatol':1e-9},method='Nelder-Mead')
+    )#options={'maxfev':100000,'xatol':1e-9},method='Nelder-Mead')
     if result.success==False:
         print('Minimization failed!')
     return result
@@ -575,11 +576,11 @@ def conditional_mle(agg_dict,file_inds=None,alpha=1e8,lamb=1e-5,single_beta=Fals
         num_betas = (np.shape(agg_dict['qpd_ffts'])[-1])
     beta_bounds = ((-10,10) for i in range(2*num_betas))
     gamma_bounds = ((-1e3,1e3) for i in range(len(axes)*num_gammas))
-    result = minimize(nll_with_background,[1,0]*num_betas+[1]*len(axes)*num_gammas,\
+    result = iminimize(nll_with_background,[1,0]*num_betas+[1]*len(axes)*num_gammas,\
                       args=(agg_dict,file_inds,alpha,lamb,single_beta,num_gammas,\
                             delta_means,spline,axes),\
                       bounds=(*beta_bounds,*gamma_bounds),\
-                      options={'maxfev':100000,'xatol':1e-9},method='Nelder-Mead')
+    )#options={'maxfev':100000,'xatol':1e-9},method='Nelder-Mead')
     if result.success==False:
         print('Minimization failed!')
     return result

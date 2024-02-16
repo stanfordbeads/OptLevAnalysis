@@ -1062,10 +1062,11 @@ def q_alpha_fit(alphas,q_vals,alpha_hat,range=[-1,5]):
 
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     fig,ax = plt.subplots(2,1,figsize=(6,6),sharex=True,gridspec_kw = {'wspace':0,'hspace':0})
-    ax[0].semilogy(alphas[q_vals>10],q_vals[q_vals>10],ls='none',marker='.',ms=10,label='Computed',zorder=10)
+    ax[0].semilogy(alphas[q_vals>10],q_vals[q_vals>10],ls='none',marker='o',ms=4,markeredgewidth=1.5,\
+                   fillstyle='none',label='Computed',zorder=10)
     ax[0].semilogy(alpha_vals,a_hat*(alpha_vals-alpha_hat)**2,label='Fit')
     ax[0].axhline(0,color=colors[2],ls='--',label='95\% CL threshold')
-    ax[1].plot(alphas,q_vals,ls='none',marker='.',zorder=11)
+    ax[1].plot(alphas,q_vals,ls='none',marker='o',ms=4,markeredgewidth=1.5,fillstyle='none',zorder=11)
     ax[1].plot(alpha_vals,a_hat*(alpha_vals-alpha_hat)**2)
     ax[1].axhline(chi2(1).ppf(0.95)*0.5,color=colors[2],ls='--')
     y_max = ax[0].get_ylim()[1]
