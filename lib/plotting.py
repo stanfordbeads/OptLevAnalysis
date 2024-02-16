@@ -426,7 +426,8 @@ def visual_diag_mat(qpd_diag_mat,overlay=True):
     return fig,ax
 
 
-def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,pspd=True,plot_inds=None):
+def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
+            pspd=True,plot_inds=None):
     '''
     Plof of the QPD and PSPD spectra for a given dataset.
     '''
@@ -523,9 +524,9 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,psp
     if accel:
         lines = ax.lines + ax2.lines
         labels = [l.get_label() for l in lines]
-        ax.legend(lines,labels,ncol=3)
+        ax.legend(lines,labels,ncol=2+int(pspd))
     else:
-        ax.legend(ncol=3)
+        ax.legend(ncol=2+int(pspd))
 
     # for some reason memory is not released and in subsequent function calls this can cause errors
     del qpd_x_asds,qpd_y_asds,pspd_x_asds,pspd_y_asds,z_asds,\
@@ -956,5 +957,127 @@ def limit_vs_integration(agg_dict,descrip=None,sensor='qpd'):
     del num_files,num_chunks,subset_inds,lambdas,ten_um_ind,num_samples,lim_pos,lim_neg,\
         lim_pos_mean,lim_neg_mean,sigma_pos,sigma_neg,first_lim_pos,first_lim_neg,integ_times,\
         noise_lim_pos,noise_lim_neg,colors
+
+    return fig,ax
+
+
+def mle_fingerprint(agg_dict,mle_result,file_inds=None,lamb=1e-5,single_beta=False,num_gammas=1,\
+                    delta_means=[0.1,0.1],axes=['x','y'],channel='signal',log=True):
+    '''
+    Plot the measured and fitted spectral fingerprints, showing the contribution of
+    background and signal to the total measurement.
+    '''
+
+    if file_inds is None:
+        file_inds = np.array(range(agg_dict['times'].shape[0]))
+
+    # choose which axes to include
+    first_axis = 0
+    second_axis = 2
+    if 'x' not in axes:
+        first_axis = 1
+    if 'y' not in axes:
+        second_axis = 1
+
+    harm_labels = ['{:.0f}'.format(i) for i in agg_dict['freqs'][agg_dict['good_inds']]]
+    
+    # work with a single value of lambda
+    lambdas = agg_dict['template_params'][0]
+    lambda_ind = np.argmin(np.abs(lambdas-lamb))
+    
+    # extract the data for these datasets
+    yuk_ffts = agg_dict['template_ffts'][file_inds,lambda_ind,...]
+    qpd_ffts = agg_dict['qpd_ffts'][file_inds,:,:]
+    qpd_sb_ffts = agg_dict['qpd_sb_ffts'][file_inds,:,:]
+    num_sb = int(qpd_sb_ffts.shape[2]/qpd_ffts.shape[2])
+    data_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,first_axis:second_axis,...]
+    data_var = (1./(2.*num_sb))*np.sum(np.real(data_sb_ffts)**2+np.imag(data_sb_ffts)**2,axis=-1)
+    background_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,3,:]
+    background_var = (1./(2.*num_sb))*np.sum(np.real(background_sb_ffts)**2+np.imag(background_sb_ffts)**2,axis=-1)
+
+    alpha,beta,gammas,deltas = reshape_nll_args(x=mle_result,data_shape=qpd_ffts.shape,alpha=None,single_beta=single_beta,\
+                                                num_gammas=num_gammas,delta_means=delta_means,axes=axes)
+    
+    # plot the real and imaginary parts separately unless doing a log plot of magnitudes
+    if log:
+        funcs = [np.abs]
+    else:
+        funcs = [np.real,np.imag]
+    
+    # swap mean and absolute value to get the measurement and fits to match
+    if channel=='signal':
+        noise = np.sqrt(data_var)
+        measurements = qpd_ffts[:,first_axis:second_axis,:]
+        signal_fits = alpha*yuk_ffts[:,first_axis:second_axis,:]
+        background_fits = beta*gammas*qpd_ffts[:,3,np.newaxis,:]
+    elif channel=='background':
+        noise = np.sqrt(background_var[:,np.newaxis])
+        measurements = qpd_ffts[:,3,np.newaxis,:]
+        signal_fits = alpha*np.sum(deltas*yuk_ffts[:,first_axis:second_axis,:],axis=1)[:,np.newaxis]
+        background_fits = beta*qpd_ffts[:,3,np.newaxis,:]
+        axes = ['null']
+    
+    fig,axs = plt.subplots(len(axes),2-int(log),figsize=(6,2*len(axes)+2),sharex=True,sharey='row',squeeze=False)
+    colors = style.library['fivethirtyeight']['axes.prop_cycle'].by_key()['color'] # seaborn-v0_8-bright Solarize_Light2
+    titles = ['Real','Imaginary']
+
+    for i in range(np.shape(axs)[0]):
+        for j,func in enumerate(funcs):
+            axs[i,j].bar(harm_labels,np.mean(noise,axis=0)[i],width=0.75,color=colors[0],label='Noise',zorder=11)
+            axs[i,j].bar(harm_labels,np.mean(-noise,axis=0)[i],width=0.75,color=colors[0],zorder=10)
+            axs[i,j].bar(harm_labels,np.mean(func(measurements),axis=0)[i],width=0.5,color=colors[1],label='Measurement',zorder=12)
+            axs[i,j].bar(harm_labels,np.mean(func(signal_fits),axis=0)[i],width=0.25,color=colors[2],label='Yukawa fit',zorder=14)
+            axs[i,j].bar(harm_labels,np.mean(func(background_fits),axis=0)[i]+np.mean(func(signal_fits),axis=0)[i],\
+                         width=0.25,color=colors[5],label='Background fit',zorder=13)
+            if j==0:
+                if axes[i]=='null':
+                    axs[i,j].set_ylabel('Force in null [arb]'.format(axes[i]))
+                else:
+                    axs[i,j].set_ylabel('Force in ${}$ [N]'.format(axes[i]))
+            if i==0 and not log:
+                axs[i,j].set_title(titles[j],fontsize=14)
+            if i==axs.shape[0]-1:
+                axs[i,j].set_xlabel('Harmonic [Hz]')
+            if log:
+                axs[i,j].set_yscale('log')
+            axs[i,j].grid(which='both',zorder=0)
+
+    handles, labels = axs[-1,-1].get_legend_handles_labels()
+    fig.legend(handles,labels,loc='upper center',ncol=4,bbox_to_anchor=(0.55,0.96))
+    fig.suptitle('Best fit to spectral fingerprint in the {} channel'.format(channel),y=1.02)
+
+    return fig,axs
+
+
+def q_alpha_fit(alphas,q_vals,alpha_hat,range=[-1,5]):
+    '''
+    Plot the fit to the test statistic vs alpha, from which the 95% CL limit is obtained.
+    '''
+
+    # alpha values for the fitted parabola plot
+    alpha_vals = np.linspace(range[0]*alpha_hat,range[1]*alpha_hat,1000)
+
+    # parameter for the best fit parabola that has the minimum in the correct spot
+    a_hat = np.sum(q_vals*(alphas-alpha_hat)**2)/np.sum((alphas-alpha_hat)**4)
+
+    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    fig,ax = plt.subplots(2,1,figsize=(6,6),sharex=True,gridspec_kw = {'wspace':0,'hspace':0})
+    ax[0].semilogy(alphas[q_vals>10],q_vals[q_vals>10],ls='none',marker='.',ms=10,label='Computed',zorder=10)
+    ax[0].semilogy(alpha_vals,a_hat*(alpha_vals-alpha_hat)**2,label='Fit')
+    ax[0].axhline(0,color=colors[2],ls='--',label='95\% CL threshold')
+    ax[1].plot(alphas,q_vals,ls='none',marker='.',zorder=11)
+    ax[1].plot(alpha_vals,a_hat*(alpha_vals-alpha_hat)**2)
+    ax[1].axhline(chi2(1).ppf(0.95)*0.5,color=colors[2],ls='--')
+    y_max = ax[0].get_ylim()[1]
+    ax[0].set_ylim([10,y_max])
+    ax[0].set_yticks(np.logspace(2,np.floor(np.log10(y_max)),int(np.floor(np.log10(y_max))-1)))
+    ax[1].set_ylim([0,10])
+    ax[1].set_xlabel(r'$\alpha$')
+    ax[0].set_ylabel(r'$q_{\alpha}$ (log scale)')
+    ax[1].set_ylabel(r'$q_{\alpha}$ (linear scale)')
+    ax[0].set_title('Quadratic fit to test statistic')
+    ax[0].grid(which='both')
+    ax[1].grid(which='both')
+    ax[0].legend(ncol=3)
 
     return fig,ax
