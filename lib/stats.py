@@ -384,9 +384,11 @@ def reshape_nll_args(x,data_shape,alpha,single_beta=False,num_gammas=1,delta_mea
     if not single_beta:
         num_betas = data_shape[2]
 
-    # extract beta and gamma aarrays from the input vector
-    beta = x[offset:offset+num_betas]
-    gammas = x[offset+num_betas:]
+    # extract beta and gamma aarrays from the input vector, constructing the full
+    # complex numbers from the real and imaginary parts for the betas
+    betas_split = x[offset:offset+2*num_betas]
+    beta = betas_split[0::2] + 1j*betas_split[1::2]
+    gammas = x[offset+2*num_betas:]
 
     # reshape array of betas if more than one
     if num_betas>1:
@@ -439,32 +441,31 @@ def nll_with_background(x,agg_dict,file_inds=None,alpha=None,lamb=1e-5,single_be
 
     # get the background measurements
     background = qpd_ffts[:,3,np.newaxis,:]
-    background_real = np.real(background)
-    background_imag = np.imag(background)
     background_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,3,:]
     background_var = (1./(2.*num_sb))*np.sum(np.real(background_sb_ffts)**2+np.imag(background_sb_ffts)**2,axis=-1)
 
     # get the measurements for each file/axis/harm
     data = qpd_ffts[:,first_axis:second_axis,:]
-    data_real = np.real(data)
-    data_imag = np.imag(data)
     data_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,first_axis:second_axis,...]
     data_var = (1./(2.*num_sb))*np.sum(np.real(data_sb_ffts)**2+np.imag(data_sb_ffts)**2,axis=-1)
 
     # get the templates for each file/axis/harm
-    signal_real = np.real(yuk_ffts[:,first_axis:second_axis,:])
-    signal_imag = np.imag(yuk_ffts[:,first_axis:second_axis,:])
+    signal = yuk_ffts[:,first_axis:second_axis,:]
 
     # all parameter arrays should be put in the shape (files,axes,harmonics)
     alpha,beta,gammas,deltas = reshape_nll_args(x,data.shape,alpha,single_beta,num_gammas,delta_means,spline,axes)
 
-    # the background channel NLL is defined for only a single background axis, so before summing has shape (files,harmonics)
-    nll_background = (background_real[:,0,:] - beta*background_real[:,0,:] - alpha*np.sum(deltas*signal_real,axis=1))**2/(2*background_var) \
-                   + (background_imag[:,0,:] - beta*background_imag[:,0,:] - alpha*np.sum(deltas*signal_imag,axis=1))**2/(2*background_var)
+    # numerators of the Gaussian terms for signal and backround
+    num_background = background[:,0,:] - beta[:,0,:]*background[:,0,:] - alpha*np.sum(deltas*signal,axis=1)
+    num_signal = data - alpha*signal - beta*gammas*background
+
+    # the background channel NLL is defined for only a single background axis, so has shape (files,harmonics)
+    nll_background = np.real(num_background)**2/(2*background_var) \
+                   + np.imag(num_background)**2/(2*background_var)
 
     # the signal channel NLL has a shape before summing of (files,axes,harmonics)
-    nll_signal = (data_real - alpha*signal_real - beta*gammas*background_real)**2/(2*data_var) \
-               + (data_imag - alpha*signal_imag - beta*gammas*background_imag)**2/(2*data_var)
+    nll_signal = np.real(num_signal)**2/(2*data_var) \
+               + np.imag(num_signal)**2/(2*data_var)
     
     return np.sum(nll_background) + np.sum(nll_signal)
 
@@ -550,13 +551,14 @@ def unconditional_mle(agg_dict,file_inds=None,lamb=1e-5,single_beta=False,\
     num_betas = 1
     if single_beta==False:
         num_betas = (np.shape(agg_dict['qpd_ffts'])[-1])
-    beta_bounds = ((-10,10) for i in range(num_betas))
+    beta_bounds = ((-10,10) for i in range(2*num_betas))
     gamma_bounds = ((-1e3,1e3) for i in range(len(axes)*num_gammas))
-    result = minimize(nll_with_background,[1e10]+[1]*num_betas+[1]*len(axes)*num_gammas,\
+    alpha_bound = 1e10*np.exp(2e-5/lamb)
+    result = minimize(nll_with_background,[1e9]+[1,0]*num_betas+[1]*len(axes)*num_gammas,\
                       args=(agg_dict,file_inds,None,lamb,single_beta,num_gammas,\
                             delta_means,spline,axes),\
-                      bounds=((-1e16,1e16),*beta_bounds,*gamma_bounds),\
-                      options={'maxfev':1000000,'fatol':1e0},method='Nelder-Mead')
+                      bounds=((-alpha_bound,alpha_bound),*beta_bounds,*gamma_bounds),\
+                      options={'maxfev':1000000,'xatol':1e-9},method='Nelder-Mead')
     if result.success==False:
         print('Minimization failed!')
     return result
@@ -571,13 +573,13 @@ def conditional_mle(agg_dict,file_inds=None,alpha=1e8,lamb=1e-5,single_beta=Fals
     num_betas = 1
     if single_beta==False:
         num_betas = (np.shape(agg_dict['qpd_ffts'])[-1])
-    beta_bounds = ((-10,10) for i in range(num_betas))
+    beta_bounds = ((-10,10) for i in range(2*num_betas))
     gamma_bounds = ((-1e3,1e3) for i in range(len(axes)*num_gammas))
-    result = minimize(nll_with_background,[1]*num_betas+[1]*len(axes)*num_gammas,\
+    result = minimize(nll_with_background,[1,0]*num_betas+[1]*len(axes)*num_gammas,\
                       args=(agg_dict,file_inds,alpha,lamb,single_beta,num_gammas,\
                             delta_means,spline,axes),\
                       bounds=(*beta_bounds,*gamma_bounds),\
-                      options={'maxfev':1000000,'fatol':1e0},method='Nelder-Mead')
+                      options={'maxfev':100000,'xatol':1e-9},method='Nelder-Mead')
     if result.success==False:
         print('Minimization failed!')
     return result
@@ -592,6 +594,8 @@ def q_with_background(alpha,uncond_nll,agg_dict,file_inds=None,\
     cond_res = conditional_mle(agg_dict,file_inds,alpha=alpha,lamb=lamb,**kwargs)
     cond_nll = cond_res.fun
     q_alpha = 2.*(cond_nll - uncond_nll)
+
+    print('Computed q for lambda={:.2e}...'.format(lamb))
     
     return q_alpha
 
@@ -656,29 +660,30 @@ def get_limit_with_background(agg_dict,file_inds=None,lamb=1e-5,cl=0.95,tol=1e-1
     return limit
 
 
-def get_alpha_vs_lambda_background(agg_dict,file_inds=None,cl=0.95,num_points=40,**kwargs):
+def get_alpha_vs_lambda_background(agg_dict,file_inds=None,cl=0.95,num_points=5,**kwargs):
     '''
     Get the 95% CL limit on alpha for the range of lambda values in agg_dict.
     '''
     lambdas = agg_dict['template_params'][0]
     print('Computing the limit at each lambda in parallel...')
     limit = Parallel(n_jobs=len(lambdas))(delayed(get_limit_from_q_parabola)\
-                                          (agg_dict,file_inds,lamb,cl,num_points,False,**kwargs)\
+                                          (agg_dict,file_inds,lamb,cl,num_points,\
+                                           False,**kwargs)\
                                           for lamb in tqdm(lambdas))
     
     return np.array(limit)
 
 
-def q_vs_alpha(alpha_hat,uncond_nll,agg_dict,file_inds=None,lamb=1e-5,num_points=40,**kwargs):
+def q_vs_alpha(alpha_hat,uncond_nll,agg_dict,file_inds=None,lamb=1e-5,num_points=5,**kwargs):
     '''
     Plot the test statistic as a function of alpha.
     '''
 
-    alphas = np.sort(np.append(np.linspace(-alpha_hat,10*alpha_hat,num_points),alpha_hat))
+    alphas = np.sort(np.append(np.linspace(-alpha_hat,5*alpha_hat,num_points),alpha_hat))
     q_vals = Parallel(n_jobs=len(alphas))(delayed(q_with_background)\
-                                          (alpha,uncond_nll,agg_dict,\
-                                           file_inds,lamb,**kwargs)\
-                                           for alpha in alphas)
+                                        (alpha,uncond_nll,agg_dict,\
+                                        file_inds,lamb,**kwargs)\
+                                        for alpha in alphas)
     
     # the test statistic should have a minimum at (alpha_hat,0). If it dips negative it's due
     # to errors in the fitting, so set it back to zero
@@ -687,13 +692,15 @@ def q_vs_alpha(alpha_hat,uncond_nll,agg_dict,file_inds=None,lamb=1e-5,num_points
     return alphas,q_vals
 
 
-def get_limit_from_q_parabola(agg_dict,file_inds=None,lamb=1e-5,cl=0.95,num_points=40,\
+def get_limit_from_q_parabola(agg_dict,file_inds=None,lamb=1e-5,cl=0.95,num_points=20,\
                               return_q0=True,**kwargs):
     '''
     The minimization is noisy and is susceptible to fluctuations if parameters are not
     chosen carefully. This function instead fits a parabola to the alpha curve and
     determines the limit from the parabola.
     '''
+
+    print('Running job for lambda={:.2e}...'.format(lamb))
 
     # threshold test statistic for a given confidence level, from Wilks' theorem
     con_val = chi2(1).ppf(cl)*0.5
@@ -702,7 +709,10 @@ def get_limit_from_q_parabola(agg_dict,file_inds=None,lamb=1e-5,cl=0.95,num_poin
     uncond_res = unconditional_mle(agg_dict,file_inds=file_inds,lamb=lamb,**kwargs)
     alpha_hat = uncond_res.x[0]
     uncond_nll = uncond_res.fun
-    alphas,q_vals = q_vs_alpha(alpha_hat,uncond_nll,agg_dict,file_inds,lamb,num_points,**kwargs)
+    alphas,q_vals = q_vs_alpha(alpha_hat,uncond_nll,agg_dict,file_inds,lamb,\
+                               num_points,**kwargs)
+    
+    print('Got q-alpha curve for lambda={:.2e}...'.format(lamb))
 
     # fit a parabola with a minimum at (alpha_hat,0) which has one free parameter
     # q = a * (alpha - alpha_hat)^2
