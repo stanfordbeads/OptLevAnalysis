@@ -895,6 +895,7 @@ class AggregateData:
         self.p0_bead = np.array(())
         self.diam_bead = np.array(())
         self.mass_bead = np.array(())
+        self.qpd_diag_mats = np.array(())
         self.file_data_objs = []
         self.bin_indices = np.array(())
         self.agg_dict = {}
@@ -919,6 +920,7 @@ class AggregateData:
         p0_bead = []
         diam_bead = []
         mass_bead = []
+        qpd_diag_mats = []
         configs = []
         for i,dir in enumerate(self.data_dirs):
             # get the bead position wrt the stage for each directory
@@ -930,6 +932,10 @@ class AggregateData:
                             p0_bead.append(config['p0_bead'])
                             diam_bead.append(config['diam_bead'])
                             mass_bead.append(config['mass_bead'])
+                            if 'qpd_diag_mat' in list(config.keys()):
+                                qpd_diag_mats.append(config['qpd_diag_mat'])
+                            else:
+                                qpd_diag_mats.append(None)
                             configs.append(config)
                     except FileNotFoundError:
                         raise Exception('Error: config file not found in directory.')
@@ -937,10 +943,15 @@ class AggregateData:
                     p0_bead.append(self.configs[i]['p0_bead'])
                     diam_bead.append(self.configs[i]['diam_bead'])
                     mass_bead.append(self.configs[i]['mass_bead'])
+                    if 'qpd_diag_mat' in list(self.configs[i].keys()):
+                        qpd_diag_mats.append(self.configs[i]['qpd_diag_mat'])
+                    else:
+                        qpd_diag_mats.append(None)
             else:
                 p0_bead.append([0,0,0])
                 diam_bead.append(0)
                 mass_bead.append(0)
+                qpd_diag_mats.append(None)
             files = os.listdir(str(dir))
             # only add files, not folders, and ensure they end with .h5 and have the correct prefix
             files = [str(dir)+'/'+f for f in files if (os.path.isfile(str(dir)+'/'+f) and \
@@ -955,6 +966,7 @@ class AggregateData:
         self.p0_bead = np.array(p0_bead)
         self.diam_bead = np.array(diam_bead)
         self.mass_bead = np.array(mass_bead)
+        self.qpd_diag_mats = np.array(qpd_diag_mats)
         self.num_files = np.array(num_files)
         if self.configs is None:
             self.configs = configs
@@ -976,14 +988,13 @@ class AggregateData:
         else:
             self.__get_file_list(no_config=no_config)
             signal_models = [None]*len(self.diam_bead)
-        ### NEED TO CHANGE TO USE DIFFERENT DIAGONALIZATION MATRICES DEPENDING ON THE DATASET
         if diagonalize_qpd:
-            qpd_diag_mat = self.configs[0]['qpd_diag_mat']
+            qpd_diag_mats = self.qpd_diag_mats
         else:
-            qpd_diag_mat = None
+            qpd_diag_mats = [None]*len(self.qpd_diag_mats)
         print('Loading data from {} files...'.format(len(self.file_list)))
         file_data_objs = Parallel(n_jobs=num_cores)(delayed(self.process_file)\
-                                                    (file_path,qpd_diag_mat,signal_models[self.bin_indices[i,0]],\
+                                                    (file_path,qpd_diag_mats[self.bin_indices[i,4]],signal_models[self.bin_indices[i,0]],\
                                                      ml_model,self.p0_bead[self.bin_indices[i,2]],\
                                                      self.mass_bead[self.bin_indices[i,1]],harms,\
                                                      max_freq,downsample,wiener,no_tf,lightweight) \
@@ -1194,7 +1205,7 @@ class AggregateData:
         files are first loaded, but never by the user.
         '''
         # initialize the list of bin indices
-        self.bin_indices = np.zeros((len(self.file_list),10)).astype(np.int32)
+        self.bin_indices = np.zeros((len(self.file_list),11)).astype(np.int32)
 
         # first bin by diam_bead, p0_bead, and descrips, basically already done when the data was read in
         for i in range(len(self.num_files)):
@@ -1204,6 +1215,7 @@ class AggregateData:
             self.bin_indices[lower_ind:upper_ind,1] = i
             self.bin_indices[lower_ind:upper_ind,2] = i
             self.bin_indices[lower_ind:upper_ind,3] = i
+            self.bin_indices[lower_ind:upper_ind,4] = i
 
         # now remove any duplicates and fix the corresponding entries in the bin_indices array
         self.__remove_duplicate_bead_params()
@@ -1262,6 +1274,17 @@ class AggregateData:
         # then set the object attribute to the duplicate-free version
         self.descrips = descrips
 
+        # same thing for qpd_diag_mats
+        mats,mat_inds = np.unique(self.qpd_diag_mats,axis=0,return_index=True)
+        mats = mats[mat_inds.argsort()]
+        mat_inds = list(range(len(mats)))
+        for mat,mat_ind in zip(mats,mat_inds):
+            # reset the values in the indices array to the index of the first unique element
+            self.bin_indices[:,4][np.all(self.qpd_diag_mats[self.bin_indices[:,4]]==mat,axis=(1,2))] = mat_ind
+
+        # then set the object attribute to the duplicate-free version
+        self.qpd_diag_mats = mats
+
 
     def __purge_bad_files(self):
         '''
@@ -1287,7 +1310,7 @@ class AggregateData:
         
         # p0_bead and diam_bead are done when data is loaded. Here, binning is done in
         # cantilever x, cantilever z, and bias. Each row of bin_indices is of the format
-        # [diam_ind, mass_ind, p0_bead_ind, descrips, cant_x_ind, cant_z_ind, \
+        # [diam_ind, mass_ind, p0_bead_ind, descrips, diag_mat_ind, cant_x_ind, cant_z_ind, \
         # accelerometer_ind, bias_ind, spec_ind, is_bad]
 
         # first create bins in x and z given the bin widths provided
@@ -1340,15 +1363,15 @@ class AggregateData:
             bin_inds_z[x_index==nonempty_z_bin] = nonempty_z_ind
 
         # pass the newly found cant bin indices to the bin_indices array
-        self.bin_indices[:,4] = bin_inds_x
-        self.bin_indices[:,5] = bin_inds_z
+        self.bin_indices[:,5] = bin_inds_x
+        self.bin_indices[:,6] = bin_inds_z
         
         # set centers of nonzero bins as a class attribute
         self.cant_bins_x = cant_bins_x
         self.cant_bins_z = cant_bins_z
 
         # update bin indices
-        self.bin_indices[:,6] = np.array([np.abs(np.mean(self.agg_dict['accelerometer'],\
+        self.bin_indices[:,7] = np.array([np.abs(np.mean(self.agg_dict['accelerometer'],\
                                                          axis=1))>accel_thresh]).astype(np.int32)
         print('Done binning data.')
 
@@ -1360,7 +1383,7 @@ class AggregateData:
         '''
 
         # define all parameters to be returned here
-        labels = ['diam_bead', 'mass_bead','p0_bead', 'descrips', 'cant_bins_x', 'cant_bins_z']
+        labels = ['diam_bead', 'mass_bead','p0_bead', 'descrips', 'qpd_diag_mats', 'cant_bins_x', 'cant_bins_z']
         print('Returning a tuple of the following arrays:')
         print('('+', '.join(labels)+')')
 
@@ -1369,11 +1392,12 @@ class AggregateData:
         masses = self.mass_bead[self.bin_indices[:,1]]
         p0s = self.p0_bead[self.bin_indices[:,2]]
         descrips = self.descrips[self.bin_indices[:,3]]
-        cant_xs = self.cant_bins_x[self.bin_indices[:,4]]
-        cant_zs = self.cant_bins_z[self.bin_indices[:,5]]
+        diag_mats = self.qpd_diag_mats[self.bin_indices[:,4]]
+        cant_xs = self.cant_bins_x[self.bin_indices[:,5]]
+        cant_zs = self.cant_bins_z[self.bin_indices[:,6]]
 
         # return the results
-        return diams,masses,p0s,descrips,cant_xs,cant_zs
+        return diams,masses,p0s,descrips,diag_mats,cant_xs,cant_zs
         
 
     def get_slice_indices(self,diam_bead=-1.,descrip='',cant_x=[-1e4,1e4],cant_z=[-1e4,1e4],accel_veto=False):
@@ -1457,12 +1481,15 @@ class AggregateData:
         else:
             accel_inds = [0,1]
 
+        # get inds for anything else
+        p0_bead_inds = list(range(len(self.p0_bead)))
+        mass_inds = list(range(len(self.mass_bead)))
+        mat_inds = list(range(len(self.qpd_diag_mats)))
         # amplitude spectral density indices. should be degenerate with all others
-        asd_inds = list(range(max(self.bin_indices[:,8]+1)))
+        asd_inds = list(range(max(self.bin_indices[:,9]+1)))
         
         # get all possible combinations of the indices found above
-        p0_bead_inds = list(range(len(self.p0_bead)))
-        index_arrays = np.array([i for i in product(diam_bead_inds,[0],p0_bead_inds,descrip_inds,\
+        index_arrays = np.array([i for i in product(diam_bead_inds,mass_inds,p0_bead_inds,descrip_inds,mat_inds,\
                                                     cant_x_inds,cant_z_inds,accel_inds,[0],asd_inds,[0])])
 
         # needs to be updated to take a range of acceptable indices for any given dimension
@@ -1520,7 +1547,7 @@ class AggregateData:
             pspd_asds.append(np.array((pspd_asd_x,pspd_asd_y)))
 
             # update the bin indices
-            self.bin_indices[:,8][unique_inds] = ind
+            self.bin_indices[:,9][unique_inds] = ind
 
         # add as class attributes
         self.qpd_asds = np.array(qpd_asds)
@@ -1755,6 +1782,7 @@ class AggregateData:
             self.p0_bead = np.array(list(object1.p0_bead) + list(object2.p0_bead))
             self.diam_bead = np.array(list(object1.diam_bead) + list(object2.diam_bead))
             self.mass_bead = np.array(list(object1.mass_bead) + list(object2.mass_bead))
+            self.qpd_diag_mats = np.array(list(object1.qpd_diag_mats) + list(object2.qpd_diag_mats))
             self.bad_files = np.array(list(object1.bad_files) + list(object2.bad_files))
             self.error_logs = np.array(list(object1.error_logs) + list(object2.error_logs))
             self.file_data_objs = object1.file_data_objs + object2.file_data_objs
@@ -1770,7 +1798,7 @@ class AggregateData:
             self.bin_indices = np.concatenate((object1.bin_indices,object2.bin_indices+offset),axis=0).astype(np.int32)
             # the indices in the remaining columns are wrong once objects are added together. Just remove
             # the indices to avoid confusion. They'll be set again once bin_by_aux_data is called.
-            self.bin_indices[:,4:] = 0
+            self.bin_indices[:,5:] = 0
             # merge amplitude spectral densities if they are all present
             if merge_asds:
                 self.qpd_asds = np.concatenate((object1.qpd_asds,object2.qpd_asds),axis=0)
@@ -1872,6 +1900,7 @@ class AggregateData:
             self.p0_bead = np.array(f['run_params/p0_bead'])
             self.diam_bead = np.array(f['run_params/diam_bead'])
             self.mass_bead = np.array(f['run_params/mass_bead'])
+            self.qpd_diag_mats = np.array(f['run_params/qpd_diag_mats'])
             self.num_to_load = np.array(f['run_params/num_to_load'])
             self.num_files = np.array(f['run_params/num_files'])
             self.bin_indices = np.array(f['run_params/bin_indices'])
