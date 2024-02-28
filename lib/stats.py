@@ -23,7 +23,7 @@ def fit_alpha_all_files(agg_dict,file_indices=None,sensor='qpd',use_ml=False,ml_
     if file_indices is None:
         file_indices = np.array(range(agg_dict['times'].shape[0]))
 
-    print('Computing the likelihood functions for the specified files...')
+    print('Computing the signal-only likelihood functions for the specified files...')
     likelihood_coeffs = Parallel(n_jobs=num_cores)(delayed(fit_alpha_for_file)\
                                                    (agg_dict,ind,sensor,use_ml,ml_veto)\
                                                     for i,ind in enumerate(tqdm(file_indices)))
@@ -129,6 +129,58 @@ def group_likelihoods_by_test(likelihood_coeffs,axis=None):
         likelihood_coeffs = likelihood_coeffs[:,axis,:,:]
     
     return likelihood_coeffs
+
+
+def group_likelihoods_by_alpha_sign(likelihood_coeffs):
+    '''
+    Returns two arrays of likelihood coefficients, one combined over the harmonics
+    with positive alpha-hat and one combined of the harmonics with negative alpha-hat.
+    '''
+
+    # input shape should be (harmonics, lambdas, NLL coefficients)
+    if len(likelihood_coeffs.shape)!=3:
+        print('Error: wrong shape! Ensure the likelihood coefficients have been properly combined first.')
+
+    # sum the likelihood functions over harmonics, including only those with the correct sign
+    pos_inds = (likelihood_coeffs[:,:,-1]>=0)[...,np.newaxis].repeat(4,axis=-1)
+    neg_inds = (likelihood_coeffs[:,:,-1]<0)[...,np.newaxis].repeat(4,axis=-1)
+    coeffs_pos = np.sum(likelihood_coeffs*pos_inds,axis=0)
+    coeffs_pos[...,-1] = -coeffs_pos[...,1]/(2.*coeffs_pos[...,0])
+    coeffs_neg = np.sum(likelihood_coeffs*neg_inds,axis=0)
+    coeffs_neg[...,-1] = -coeffs_neg[...,1]/(2.*coeffs_neg[...,0])
+
+    return coeffs_pos,coeffs_neg
+
+
+def group_likelihood_by_strongest_n_harms(likelihood_coeffs,agg_dict,num_harms):
+    '''
+    Returns an array of likelihood coefficients with the dimension along the harmonics reduced
+    to num_harms, where the remaining harmonics are the ones with the greates signal power.
+    '''
+
+    if len(likelihood_coeffs.shape)<3:
+        print('Error: the likelihood coefficients array has the wrong shape!')
+        return
+
+    # compute the signal power at each of the harmonics, adding axes in quadrature
+    signal_strength = np.sqrt(np.mean(np.sum(np.abs(agg_dict['template_ffts'])**2,axis=-2),axis=0))
+
+    freqs = agg_dict['freqs'][agg_dict['good_inds']]
+
+    # create a new array for the likelihood coeffs including only the strongest harmonics
+    shape = np.array(np.shape(likelihood_coeffs))
+    harm_ax = int(len(shape)>4)
+    shape[harm_ax] = num_harms
+    likelihood_coeffs_new = np.zeros(shape)
+    
+    # loop through the lambdas and for each, keep only the strongest n harmonics
+    harm_inds = []
+    for i in range(signal_strength.shape[0]):
+        harm_inds = np.argsort(signal_strength[i,:])[-num_harms:]
+        likelihood_coeffs_new[...,i,:] = np.take(likelihood_coeffs[...,i,:],harm_inds,axis=harm_ax)
+
+    return likelihood_coeffs_new
+    
 
 
 def test_stat_func(alpha,likelihood_coeffs,discovery=False):
@@ -301,6 +353,26 @@ def get_alpha_vs_lambda(likelihood_coeffs,lambdas,discovery=False,\
         pos_disc[disc>0] = disc[disc>0]
         neg_disc[disc<0] = np.abs(disc[disc<0])
         return pos_disc,neg_disc
+    
+
+def get_abs_alpha_vs_lambda(likelihood_coeffs,lambdas,discovery=False,\
+                            z_discovery=3,confidence_level=0.95):
+    '''
+    Set a limit on the absolute value of alpha by computing independent limits based on
+    combining harmonics of the same sign, then taking the largest of the limits on each sign.
+    '''
+
+    # likelihood coefficients should have already be combined over everything but harmonics,
+    # and should therefore have shape (harmonics, lambdas, NLL coefficients)
+    coeffs_pos,coeffs_neg = group_likelihoods_by_alpha_sign(likelihood_coeffs)
+    lim_pos,_ = get_alpha_vs_lambda(coeffs_pos,lambdas,discovery=discovery,\
+                                    z_discovery=z_discovery,confidence_level=confidence_level)
+    _,lim_neg = get_alpha_vs_lambda(coeffs_neg,lambdas,discovery=discovery,\
+                                    z_discovery=z_discovery,confidence_level=confidence_level)
+    
+    limit = np.amax(np.vstack((np.abs(lim_pos),np.abs(lim_neg))),axis=0)
+
+    return limit
 
 
 def get_test_stat_dist(likelihood_coeffs,alpha,lamb_ind,num_samples=100,files_per_sample=100,\
@@ -359,7 +431,7 @@ def get_alpha_scale(likelihood_coeffs,lambdas):
 
 
 def reshape_nll_args(x,data_shape,alpha,single_beta=False,num_gammas=1,delta_means=[0.1,0.1],\
-                     spline=False,axes=['x','y']):
+                     spline=False,axes=['x','y'],harms=[]):
     '''
     Read the arguments from the dictionary and reshape them into the correctly-shaped
     numpy arrays.
@@ -412,11 +484,13 @@ def reshape_nll_args(x,data_shape,alpha,single_beta=False,num_gammas=1,delta_mea
     return alpha,beta,gammas,deltas
 
 
-def nll_with_background(x,agg_dict,file_inds=None,alpha=None,lamb=1e-5,single_beta=False,\
-                        num_gammas=1,delta_means=[0.1,0.1],spline=False,axes=['x','y']):
+def nll_with_background(agg_dict,file_inds=None,alpha=None,lamb=1e-5,single_beta=False,\
+                        num_gammas=1,delta_means=[0.1,0.1],spline=False,axes=['x','y'],harms=[]):
     '''
     Implementation of the negative log-likelihood function including both the signal
-    model and an in-situ background measurement on some additional data stream.
+    model and an in-situ background measurement on some additional data stream. Extracts
+    the data from the agg_dict and reshapes it. Returns a function that takes as an argument
+    only the 1-dimensional vector of parameters for the NLL to be minimized over.
     '''
 
     if file_inds is None:
@@ -430,64 +504,12 @@ def nll_with_background(x,agg_dict,file_inds=None,alpha=None,lamb=1e-5,single_be
     if 'y' not in axes:
         second_axis = 1
 
-    # work with a single value of lambda
-    lambdas = agg_dict['template_params'][0]
-    lambda_ind = np.argmin(np.abs(lambdas-lamb))
-    
-    # extract the data for these datasets
-    yuk_ffts = agg_dict['template_ffts'][file_inds,lambda_ind,...]
-    qpd_ffts = agg_dict['qpd_ffts'][file_inds]
-    qpd_sb_ffts = agg_dict['qpd_sb_ffts'][file_inds]
-    num_sb = int(qpd_sb_ffts.shape[2]/qpd_ffts.shape[2])
-
-    # get the background measurements
-    background = qpd_ffts[:,3,np.newaxis,:]
-    background_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,3,:]
-    background_var = (1./(2.*num_sb))*np.sum(np.real(background_sb_ffts)**2+np.imag(background_sb_ffts)**2,axis=-1)
-
-    # get the measurements for each file/axis/harm
-    data = qpd_ffts[:,first_axis:second_axis,:]
-    data_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,first_axis:second_axis,...]
-    data_var = (1./(2.*num_sb))*np.sum(np.real(data_sb_ffts)**2+np.imag(data_sb_ffts)**2,axis=-1)
-
-    # get the templates for each file/axis/harm
-    signal = yuk_ffts[:,first_axis:second_axis,:]
-
-    # all parameter arrays should be put in the shape (files,axes,harmonics)
-    alpha,beta,gammas,deltas = reshape_nll_args(x,data.shape,alpha,single_beta,num_gammas,delta_means,spline,axes)
-
-    # numerators of the Gaussian terms for signal and backround
-    num_background = background[:,0,:] - beta[:,0,:]*background[:,0,:] - alpha*np.sum(deltas*signal,axis=1)
-    num_signal = data - alpha*signal - beta*gammas*background
-
-    # the background channel NLL is defined for only a single background axis, so has shape (files,harmonics)
-    nll_background = np.real(num_background)**2/(2*background_var) \
-                   + np.imag(num_background)**2/(2*background_var)
-
-    # the signal channel NLL has a shape before summing of (files,axes,harmonics)
-    nll_signal = np.real(num_signal)**2/(2*data_var) \
-               + np.imag(num_signal)**2/(2*data_var)
-    
-    return np.sum(nll_background) + np.sum(nll_signal)
-
-
-def nll_tester(x,agg_dict,file_inds=None,alpha=None,lamb=1e-5,single_beta=False,\
-               num_gammas=1,delta_means=[0.1,0.1],spline=False,axes=['x','y']):
-    '''
-    Check dimensions of all terms that go into the likelihood function to ensure the
-    data is being unpacked correctly.
-    '''
-
-    if file_inds is None:
-        file_inds = np.array(range(agg_dict['times'].shape[0]))
-
-    # choose which axes to include
-    first_axis = 0
-    second_axis = 2
-    if 'x' not in axes:
-        first_axis = 1
-    if 'y' not in axes:
-        second_axis = 1
+    # choose which harmonics to include
+    if harms==[]:
+        harm_inds = np.array(range(len(agg_dict['good_inds'])))
+    else:
+        harms_full = agg_dict['freqs'][agg_dict['good_inds']]
+        harm_inds = [np.argmin(np.abs(3*h - harms_full)) for h in harms]
 
     # work with a single value of lambda
     lambdas = agg_dict['template_params'][0]
@@ -500,50 +522,50 @@ def nll_tester(x,agg_dict,file_inds=None,alpha=None,lamb=1e-5,single_beta=False,
     num_sb = int(qpd_sb_ffts.shape[2]/qpd_ffts.shape[2])
 
     # get the background measurements
-    background = qpd_ffts[:,3,np.newaxis,:]
-    background_real = np.real(background)
-    background_imag = np.imag(background)
-    background_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,3,:]
+    background = qpd_ffts[:,np.newaxis,3,harm_inds]
+    background_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,3,harm_inds]
     background_var = (1./(2.*num_sb))*np.sum(np.real(background_sb_ffts)**2+np.imag(background_sb_ffts)**2,axis=-1)
 
     # get the measurements for each file/axis/harm
-    data = qpd_ffts[:,first_axis:second_axis,:]
-    data_real = np.real(data)
-    data_imag = np.imag(data)
-    data_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,first_axis:second_axis,...]
+    data = qpd_ffts[:,first_axis:second_axis,harm_inds]
+    data_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)\
+                   [:,first_axis:second_axis,harm_inds]
     data_var = (1./(2.*num_sb))*np.sum(np.real(data_sb_ffts)**2+np.imag(data_sb_ffts)**2,axis=-1)
 
     # get the templates for each file/axis/harm
-    signal_real = np.real(yuk_ffts[:,first_axis:second_axis,:])
-    signal_imag = np.imag(yuk_ffts[:,first_axis:second_axis,:])
+    signal = yuk_ffts[:,first_axis:second_axis,harm_inds]
 
-    # all parameter arrays should be put in the shape (files,axes,harmonics)
-    alpha,beta,gammas,deltas = reshape_nll_args(x,data.shape,alpha,single_beta,num_gammas,delta_means,spline,axes)
+    # must define alpha in this namespace
+    alpha_arg = alpha
 
-    print('Shapes of likelihood parameters and data:')
-    print('-----------------------------------------')
-    print('Alpha:\t\t',alpha.shape)
-    print('Beta:\t\t',beta.shape)
-    print('Gamma:\t\t',gammas.shape)
-    print('Delta:\t\t',deltas.shape)
-    print('Signal:\t\t',data_real.shape)
-    print('Signal var:\t',data_var.shape)
-    print('Background:\t', background_real.shape)
-    print('Background var:\t',background_var.shape)
-    print('\nValues of likelihood parameters and data:')
-    print('-----------------------------------------')
-    print('Alpha:\t\t',alpha)
-    print('Beta:\t\t',beta)
-    print('Gamma:\t\t',gammas[0])
-    print('Delta:\t\t',deltas)
-    print('Signal:\t\t',data_real[0])
-    print('Signal var:\t',data_var[0])
-    print('Background:\t', background_real[0])
-    print('Background var:\t',background_var[0])
+    def nll_func(x):
+        '''
+        Function to be minimized.
+        '''
+
+        # all parameter arrays should be put in the shape (files,axes,harmonics)
+        alpha,beta,gammas,deltas = reshape_nll_args(x,data.shape,alpha_arg,single_beta,num_gammas,delta_means,spline,axes)
+
+        # numerators of the Gaussian terms for signal and backround
+        num_background = background[:,0,:] - beta[:,0,:]*background[:,0,:] - alpha*np.sum(deltas*signal,axis=1)
+        num_signal = data - alpha*signal - beta*gammas*background
+
+        # the background channel NLL is defined for only a single background axis, so has shape (files,harmonics)
+        nll_background = np.real(num_background)**2/(2*background_var) \
+                       + np.imag(num_background)**2/(2*background_var)
+
+        # the signal channel NLL has a shape before summing of (files,axes,harmonics)
+        nll_signal = np.real(num_signal)**2/(2*data_var) \
+                   + np.imag(num_signal)**2/(2*data_var)
+        
+        return np.sum(nll_background) + np.sum(nll_signal)
+    
+    return nll_func
 
 
 def unconditional_mle(agg_dict,file_inds=None,lamb=1e-5,single_beta=False,\
-                      num_gammas=1,delta_means=[0.1,0.1],spline=False,axes=['x','y']):
+                      num_gammas=1,delta_means=[0.1,0.1],spline=False,\
+                      axes=['x','y'],harms=[]):
     '''
     Maximize the likelihood function over both the signal and background
     parameters. Returns the unconditional maximum likelihood estimates for
@@ -555,18 +577,18 @@ def unconditional_mle(agg_dict,file_inds=None,lamb=1e-5,single_beta=False,\
     beta_bounds = ((-10,10) for i in range(2*num_betas))
     gamma_bounds = ((-1e3,1e3) for i in range(len(axes)*num_gammas))
     alpha_bound = 1e10*np.exp(2e-5/lamb)
-    result = iminimize(nll_with_background,[1e9]+[1,0]*num_betas+[1]*len(axes)*num_gammas,\
-                      args=(agg_dict,file_inds,None,lamb,single_beta,num_gammas,\
-                            delta_means,spline,axes),\
-                      bounds=((-alpha_bound,alpha_bound),*beta_bounds,*gamma_bounds),\
-    )#options={'maxfev':100000,'xatol':1e-9},method='Nelder-Mead')
+    nll_func = nll_with_background(agg_dict,file_inds,None,lamb,single_beta,num_gammas,\
+                                   delta_means,spline,axes,harms)
+    result = iminimize(nll_func,[1e9]+[1,0]*num_betas+[1]*len(axes)*num_gammas,\
+                       bounds=((-alpha_bound,alpha_bound),*beta_bounds,*gamma_bounds))
     if result.success==False:
         print('Minimization failed!')
     return result
     
 
 def conditional_mle(agg_dict,file_inds=None,alpha=1e8,lamb=1e-5,single_beta=False,\
-                    num_gammas=1,delta_means=[0.1,0.1],spline=False,axes=['x','y']):
+                    num_gammas=1,delta_means=[0.1,0.1],spline=False,axes=['x','y'],\
+                    harms=[]):
     '''
     Maximize the likelihood function over both the background only.
     Returns the conditional maximum likelihood estimate for beta.
@@ -576,11 +598,10 @@ def conditional_mle(agg_dict,file_inds=None,alpha=1e8,lamb=1e-5,single_beta=Fals
         num_betas = (np.shape(agg_dict['qpd_ffts'])[-1])
     beta_bounds = ((-10,10) for i in range(2*num_betas))
     gamma_bounds = ((-1e3,1e3) for i in range(len(axes)*num_gammas))
-    result = iminimize(nll_with_background,[1,0]*num_betas+[1]*len(axes)*num_gammas,\
-                      args=(agg_dict,file_inds,alpha,lamb,single_beta,num_gammas,\
-                            delta_means,spline,axes),\
-                      bounds=(*beta_bounds,*gamma_bounds),\
-    )#options={'maxfev':100000,'xatol':1e-9},method='Nelder-Mead')
+    nll_func = nll_with_background(agg_dict,file_inds,alpha,lamb,single_beta,num_gammas,\
+                                   delta_means,spline,axes,harms)
+    result = iminimize(nll_func,[1,0]*num_betas+[1]*len(axes)*num_gammas,\
+                       bounds=(*beta_bounds,*gamma_bounds))
     if result.success==False:
         print('Minimization failed!')
     return result
@@ -612,6 +633,7 @@ def z_discovery(q_disc):
 def plr_limit_func(alpha,alpha_hat,uncond_nll,agg_dict,file_inds=None,\
                    lamb=1e-5,cl=0.95,**kwargs):
     '''
+    DEPRECATED
     This function's root occurs at the alpha value corresponding to an exclusion at
     the specified confidence level.
     '''
@@ -625,6 +647,7 @@ def plr_limit_func(alpha,alpha_hat,uncond_nll,agg_dict,file_inds=None,\
 def plr_critical_value(alpha_hat,uncond_nll,agg_dict,file_inds=None,\
                        lamb=1e-5,cl=0.95,tol=1e-1,max_iters=3,**kwargs):
     '''
+    DEPRECATED
     Custom root-finding function to get the value of alpha for a given confidence level.
     '''
     alpha_low = alpha_hat
@@ -649,6 +672,7 @@ def plr_critical_value(alpha_hat,uncond_nll,agg_dict,file_inds=None,\
 def get_limit_with_background(agg_dict,file_inds=None,lamb=1e-5,cl=0.95,tol=1e-1,\
                               max_iters=3,**kwargs):
     '''
+    DEPRECATED
     Find the value of alpha that is greater than 95 percent of the test statistic
     distribution under the null hypothesis.
     '''
@@ -661,18 +685,80 @@ def get_limit_with_background(agg_dict,file_inds=None,lamb=1e-5,cl=0.95,tol=1e-1
     return limit
 
 
-def get_alpha_vs_lambda_background(agg_dict,file_inds=None,cl=0.95,num_points=5,**kwargs):
+def get_abs_limit_from_q_parabola(agg_dict,pos_harms,neg_harms,file_inds=None,\
+                                  lamb=1e-5,cl=0.95,num_points=5,**kwargs):
+    '''
+    Find the value of alpha that is greater than 95 percent of the test statistic
+    distribution under the null hypothesis
+    '''
+    harms_list = [pos_harms,neg_harms]
+    alpha_lims = []
+    for i in range(2):
+        print('Running unconditional NLL minimization for lambda={:.2e}...'.format(lamb))
+
+        # threshold test statistic for a given confidence level, from Wilks' theorem
+        con_val = chi2(1).ppf(cl)*0.5
+
+        # compute the test statistic for a range of alphas
+        uncond_res = unconditional_mle(agg_dict,file_inds=file_inds,lamb=lamb,\
+                                       harms=harms_list[i],**kwargs)
+        alpha_hat = uncond_res.x[0]
+        uncond_nll = uncond_res.fun
+        alphas,q_vals = q_vs_alpha(alpha_hat,uncond_nll,agg_dict,file_inds,lamb,\
+                                   num_points,harms=harms_list[i],**kwargs)
+        
+        print('Got q-alpha curve for lambda={:.2e}...'.format(lamb))
+
+        # fit a parabola with a minimum at (alpha_hat,0) which has one free parameter
+        # q = a * (alpha - alpha_hat)^2
+        # analytic solution to the least-squares fitting
+        a_hat = np.sum(q_vals*(alphas-alpha_hat)**2)/np.sum((alphas-alpha_hat)**4)
+
+        # value at which the parabola crosses the CL threshold
+        alpha_lims.append(alpha_hat + np.sign(alpha_hat)*np.sqrt(con_val/a_hat))
+
+    return np.amax(np.abs(alpha_lims))
+
+    
+def get_alpha_vs_lambda_background(agg_dict,file_inds=None,cl=0.95,num_points=5,\
+                                   harm_list=[],**kwargs):
     '''
     Get the 95% CL limit on alpha for the range of lambda values in agg_dict.
     '''
+
     lambdas = agg_dict['template_params'][0]
+
+    # if no list of harmonics is given, use all harmonics for each lambda
+    if harm_list==[]:
+        harm_list = [[] for i in range(len(lambdas))]
+    
     print('Computing the limit at each lambda in parallel...')
     limit = Parallel(n_jobs=len(lambdas))(delayed(get_limit_from_q_parabola)\
                                           (agg_dict,file_inds,lamb,cl,num_points,\
-                                           False,**kwargs)\
-                                          for lamb in tqdm(lambdas))
+                                           False,harms=harm_list[i],**kwargs)\
+                                          for i,lamb in enumerate(tqdm(lambdas)))
     
     return np.array(limit)
+
+
+def get_abs_alpha_vs_lambda_background(agg_dict,pos_harms,neg_harms,file_inds=None,\
+                                       cl=0.95,num_points=5,**kwargs):
+    '''
+    Set the limit on the absolute value of alpha for the range of lambdas, where harmonics
+    with positive alpha-hat are used for the positive alpha limit, harmonics with negative
+    alpha-hat are used for the negative alpha limit, and the limit on the absolute value is
+    the greater of the absolute values of the two. The arguments pos_harms and neg_harms can
+    be obtained from the function split_harms_by_alpha_sign.
+    '''
+
+    harm_lists = [pos_harms,neg_harms]
+    limits = []
+    for i in range(2):
+        limits.append(get_alpha_vs_lambda_background(agg_dict,file_inds,cl=cl,\
+                                                     num_points=num_points,\
+                                                     harm_list=harm_lists[i],**kwargs))
+    
+    return np.amax(np.vstack(np.abs(limits)),axis=0)
 
 
 def q_vs_alpha(alpha_hat,uncond_nll,agg_dict,file_inds=None,lamb=1e-5,num_points=5,**kwargs):
@@ -701,7 +787,7 @@ def get_limit_from_q_parabola(agg_dict,file_inds=None,lamb=1e-5,cl=0.95,num_poin
     determines the limit from the parabola.
     '''
 
-    print('Running job for lambda={:.2e}...'.format(lamb))
+    print('Running unconditional NLL minimization for lambda={:.2e}...'.format(lamb))
 
     # threshold test statistic for a given confidence level, from Wilks' theorem
     con_val = chi2(1).ppf(cl)*0.5
@@ -730,3 +816,35 @@ def get_limit_from_q_parabola(agg_dict,file_inds=None,lamb=1e-5,cl=0.95,num_poin
         return alpha_lim,q_zero
     else:
         return alpha_lim
+
+ 
+def split_harms_by_alpha_sign(agg_dict,num_cores=39,axes=['x','y']):
+    '''
+    Returns two lists with the same length as the agg_dict's array of
+    lambda values. Each contains arrays of the harmonics of a given sign
+    for the corresponding value of lambda.
+    '''
+
+    # choose which axes to include
+    first_axis = 0
+    second_axis = 2
+    if 'x' not in axes:
+        first_axis = 1
+    if 'y' not in axes:
+        second_axis = 1
+    
+    # use the signal-only model to determine whether each harmonic
+    # has a positive or negative alpha-hat
+    lambdas = agg_dict['template_params'][0]
+    likelihood_coeffs = fit_alpha_all_files(agg_dict,num_cores=num_cores)
+    likelihood_coeffs = combine_likelihoods_over_dim(likelihood_coeffs,which='file')
+    likelihood_coeffs = np.sum(likelihood_coeffs[:,first_axis:second_axis,...],axis=1)
+    likelihood_coeffs[...,-1] = -likelihood_coeffs[...,1]/(2.*likelihood_coeffs[...,0])
+    alpha_hats = likelihood_coeffs[:,:,-1]
+    pos_harms = [np.array(agg_dict['freqs'][agg_dict['good_inds']]\
+                [np.argwhere((alpha_hats>=0)[:,i])[:,0]]/3,dtype=int) for i in range(len(lambdas))]
+    neg_harms = [np.array(agg_dict['freqs'][agg_dict['good_inds']]\
+                [np.argwhere((alpha_hats<0)[:,i])[:,0]]/3,dtype=int) for i in range(len(lambdas))]
+    
+    return pos_harms,neg_harms
+
