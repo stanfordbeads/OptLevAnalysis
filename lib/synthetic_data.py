@@ -9,7 +9,7 @@ class SynthFile(FileData):
     to be made for an already-moving cantilever, use the argument noise_only=False when loading data.
     '''
 
-    def load_and_inject(self,alpha=1e7,lamb=10.,noise_only=True,**kwargs):
+    def load_and_inject(self,alpha=1e7,lamb=10.,noise_only=True,cant_stroke=170.,**kwargs):
         '''
         Loads the data in the same way as the usual FileData class with a couple steps changed to allow for the
         injection of synthetic signals.
@@ -24,7 +24,7 @@ class SynthFile(FileData):
 
         # add synthetic cantilever motion to the noise data so we get a non-trivial signal model
         if noise_only:
-            cant_y = 85.*np.sin(2.*np.pi*3.*np.linspace(0,10,self.nsamp))
+            cant_y = (cant_stroke/2.)*np.sin(2.*np.pi*3.*np.linspace(0,10,self.nsamp))
             self.cant_pos_calibrated = self.cant_pos_calibrated + np.array((np.zeros_like(cant_y),cant_y,np.zeros_like(cant_y)))
 
         # make the synthetic signal using the modified cantilever data and the given alpha and lambda
@@ -127,7 +127,7 @@ class SynthAggregate(AggregateData):
         self.noise_only = noise_only
 
 
-    def process_file(self,file_path,diagonalize_qpd=False,signal_model=None,ml_model=None,p0_bead=None,\
+    def process_file(self,file_path,qpd_diag_mat=None,signal_model=None,ml_model=None,p0_bead=None,\
                      mass_bead=0,harms=[],max_freq=500.,downsample=True,wiener=[False,True,False,False,False],\
                      no_tf=False,lightweight=True):
         '''
@@ -135,7 +135,7 @@ class SynthAggregate(AggregateData):
         '''
         this_file = SynthFile(file_path)
         try:
-            this_file.load_and_inject(diagonalize_qpd=diagonalize_qpd,signal_model=signal_model,ml_model=ml_model,\
+            this_file.load_and_inject(qpd_diag_mat=qpd_diag_mat,signal_model=signal_model,ml_model=ml_model,\
                                       p0_bead=p0_bead,mass_bead=mass_bead,harms=harms,downsample=downsample,wiener=wiener,\
                                       max_freq=max_freq,no_tf=no_tf,lightweight=lightweight,alpha=self.alpha,lamb=self.lamb,\
                                       noise_only=self.noise_only)
