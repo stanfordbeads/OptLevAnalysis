@@ -22,7 +22,7 @@ class SignalModel:
 
 class GravFuncs(SignalModel):
     '''
-    Child class of SignalModel
+    Child class of SignalModel for the Yukawa-modified gravity model.
     '''
 
     def load_force_funcs(self,lambda_range=[1e-6,1e-4],num_lambdas=None):
@@ -100,9 +100,60 @@ class GravFuncs(SignalModel):
         lamb_ind = param_inds[0]
 
         # get the x,y, and z components of the force and return them
-        x_force = self.yuk_funcs[0][lamb_ind](positions) # self.grav_funcs[0](positions) + 
-        y_force = self.yuk_funcs[1][lamb_ind](positions) # self.grav_funcs[1](positions) + 
-        z_force = self.yuk_funcs[2][lamb_ind](positions) # self.grav_funcs[2](positions) + 
+        x_force = self.yuk_funcs[0][lamb_ind](positions)
+        y_force = self.yuk_funcs[1][lamb_ind](positions)
+        z_force = self.yuk_funcs[2][lamb_ind](positions)
+
+        force_array = np.array((x_force,y_force,z_force)).T
+
+        return force_array
+    
+
+class EDMFuncs(SignalModel):
+    '''
+    Child class of SignalModel for the electric dipole moment background model.
+    '''
+
+    def load_force_funcs(self,dipole_vec=[100,0,0]):
+        '''
+        Load the electric dipole moment background model, which has been parsed from
+        the COMSOL simulation output and saved as numpy arrays.
+        '''
+
+        # load electric dipole moment background data from simulation output
+        grad_e = np.load(self.theory_data_dir + 'grad_efield.npy')
+        xpos = np.load(self.theory_data_dir + 'xpos.npy')
+        ypos = np.load(self.theory_data_dir + 'ypos.npy')
+        zpos = np.load(self.theory_data_dir + 'zpos.npy')
+
+        # dipole moment vector in units of e-microns
+        dipole_vec = np.array(dipole_vec)
+
+        # dot product of the dipole moment vector with the electric field gradient
+        q_e = 1.602176634e-19
+        force = np.einsum('i,ijklm->jklm',dipole_vec,grad_e)*q_e*1e-6 # force in N
+
+        # build interpolating functions for the force on the dipole
+        edm_funcs = [0,0,0]
+        # loop through components of the force
+        for component_ind in [0,1,2]:
+            edm_funcs[component_ind] = interpolate.RegularGridInterpolator((xpos, ypos, zpos), force[component_ind,:,:,:])
+
+        # save the interpolating functions as class attributes
+        self.edm_funcs = edm_funcs
+        self.loaded = True
+
+
+    def get_force_at_pos(self, positions):
+        '''
+        Return the force at a given position. Argument 'positions' is an array of dimensions
+        Nx3 where N is the number of positions where the force should be calculated.
+        '''
+
+        # get the x,y, and z components of the force and return them
+        x_force = self.edm_funcs[0](positions)
+        y_force = self.edm_funcs[1](positions)
+        z_force = self.edm_funcs[2](positions)
 
         force_array = np.array((x_force,y_force,z_force)).T
 
