@@ -5,6 +5,7 @@ import re
 import pickle
 import yaml
 import time
+import ast
 import scipy.interpolate as interp
 import scipy.signal as sig
 from scipy.optimize import curve_fit
@@ -317,8 +318,7 @@ class FileData:
         quad_sum = np.sum(amps[:4,:],axis=0)
 
         # set object attribute with a numpy array of x,y,z
-        self.quad_raw_data = np.array([x.astype(np.float64)/quad_sum,y.astype(np.float64)/quad_sum,\
-                                       phases[4]])
+        self.quad_raw_data = np.array([x.astype(np.float64)/quad_sum,y.astype(np.float64)/quad_sum,phases[4]])
         self.quad_null = n.astype(np.float64)/quad_sum
 
 
@@ -479,7 +479,8 @@ class FileData:
         if sensor=='QPD':
             raw_data = self.quad_raw_data
             self.force_cal_factors_qpd = force_cal_factors
-            null_fft = np.fft.rfft(self.quad_null)[:len(self.freqs)]
+            null_raw = self.quad_null - np.mean(self.quad_null)
+            null_fft = np.fft.rfft(null_raw)[:len(self.freqs)]
         elif sensor=='PSPD':
             raw_data = self.pspd_raw_data
             self.force_cal_factors_pspd = force_cal_factors
@@ -892,10 +893,16 @@ class AggregateData:
         self.num_to_load = np.array(num_to_load)
         self.num_files = np.array([])
         self.file_list = np.array([])
+        self.diagonalize = False
+        self.noise_subtracted = False
         self.p0_bead = np.array(())
         self.diam_bead = np.array(())
         self.mass_bead = np.array(())
         self.qpd_diag_mats = np.array(())
+        self.naive_mat = np.array(((1.,1.,-1.,-1.),\
+                                   (1.,-1.,1.,-1.),\
+                                   (1.,-1.,-1.,1.),\
+                                   (1.,1.,1.,1.)))
         self.file_data_objs = []
         self.bin_indices = np.array(())
         self.agg_dict = {}
@@ -935,7 +942,7 @@ class AggregateData:
                             if 'qpd_diag_mat' in list(config.keys()):
                                 qpd_diag_mats.append(config['qpd_diag_mat'])
                             else:
-                                qpd_diag_mats.append(None)
+                                qpd_diag_mats.append(self.naive_mat)
                             configs.append(config)
                     except FileNotFoundError:
                         raise Exception('Error: config file not found in directory.')
@@ -946,12 +953,12 @@ class AggregateData:
                     if 'qpd_diag_mat' in list(self.configs[i].keys()):
                         qpd_diag_mats.append(self.configs[i]['qpd_diag_mat'])
                     else:
-                        qpd_diag_mats.append(None)
+                        qpd_diag_mats.append(self.naive_mat)
             else:
                 p0_bead.append([0,0,0])
                 diam_bead.append(0)
                 mass_bead.append(0)
-                qpd_diag_mats.append(None)
+                qpd_diag_mats.append(self.naive_mat)
             files = os.listdir(str(dir))
             # only add files, not folders, and ensure they end with .h5 and have the correct prefix
             files = [str(dir)+'/'+f for f in files if (os.path.isfile(str(dir)+'/'+f) and \
@@ -969,7 +976,7 @@ class AggregateData:
         self.qpd_diag_mats = np.array(qpd_diag_mats)
         self.num_files = np.array(num_files)
         if self.configs is None:
-            self.configs = configs
+            self.configs = np.array(configs)
         self.__bin_by_config_data()
 
 
@@ -990,6 +997,7 @@ class AggregateData:
             signal_models = [None]*len(self.diam_bead)
         if diagonalize_qpd:
             qpd_diag_mats = self.qpd_diag_mats
+            self.diagonalize = True
         else:
             qpd_diag_mats = [None]*len(self.qpd_diag_mats)
         print('Loading data from {} files...'.format(len(self.file_list)))
@@ -1275,7 +1283,7 @@ class AggregateData:
         self.descrips = descrips
 
         # same thing for qpd_diag_mats
-        mats,mat_inds = np.unique(self.qpd_diag_mats,axis=0,return_index=True)
+        mats,mat_inds = np.unique(np.array(self.qpd_diag_mats),axis=0,return_index=True)
         mats = mats[mat_inds.argsort()]
         mat_inds = list(range(len(mats)))
         for mat,mat_ind in zip(mats,mat_inds):
@@ -1608,10 +1616,14 @@ class AggregateData:
             p_y,_ = curve_fit(lor,freqs[freq_inds[2]:freq_inds[3]],mean_ffts_y[freq_inds[2]:freq_inds[3]],\
                             p0=[freqs[max_ind_y],width_guess[1],1e-3])
             max_ind_y = np.argmin(np.abs(freqs-p_y[0]))
+            failed = False
         except RuntimeError:
             print('Error: peak fitting failed!')
             max_ind_x = np.argmin(np.abs(freqs-peak_guess[0]))
             max_ind_y = np.argmin(np.abs(freqs-peak_guess[1]))
+            p_x = freqs[max_ind_x]
+            p_y = freqs[max_ind_y]
+            failed = True
         max_ind_n = np.argmin(np.abs(freqs-2000.))
 
         # get the raw data from each quadrant
@@ -1643,14 +1655,18 @@ class AggregateData:
             ax[0].semilogy(freqs,np.abs(fft_qpd_2)*fft_to_asd,alpha=0.65,label='Q2')
             ax[0].semilogy(freqs,np.abs(fft_qpd_3)*fft_to_asd,alpha=0.65,label='Q3')
             ax[0].semilogy(freqs,np.abs(fft_qpd_4)*fft_to_asd,alpha=0.65,label='Q4')
+            ax[0].axvline(freqs[max_ind_x],color='k',alpha=0.8,ls='--',lw=1)
+            ax[0].axvline(freqs[max_ind_y],color='k',alpha=0.8,ls='--',lw=1)
             ax[1].plot(freqs,np.angle(fft_qpd_1)*180./np.pi,'.',ms='2',label='Q1')
             ax[1].plot(freqs,np.angle(fft_qpd_2)*180./np.pi,'.',ms='2',label='Q2')
             ax[1].plot(freqs,np.angle(fft_qpd_3)*180./np.pi,'.',ms='2',label='Q3')
             ax[1].plot(freqs,np.angle(fft_qpd_4)*180./np.pi,'.',ms='2',label='Q4')
+            ax[1].axvline(freqs[max_ind_x],color='k',alpha=0.8,ls='--',lw=1)
+            ax[1].axvline(freqs[max_ind_y],color='k',alpha=0.8,ls='--',lw=1)
             ax[0].set_title('Response of individual quadrants')
             ax[1].set_xlabel('Frequency [Hz]')
             ax[1].set_xlim([min(freq_ranges)-20,max(freq_ranges)+20])
-            ax[0].set_ylabel('ASD [1/$\sqrt{\mathrm{Hz}}$]')
+            ax[0].set_ylabel('ASD [arb/$\sqrt{\mathrm{Hz}}$]')
             ax[0].set_ylim([1e-6,1e-3 ])
             ax[1].set_ylabel('Phase [degrees]')
             ax[1].set_ylim([-200,200])
@@ -1661,19 +1677,19 @@ class AggregateData:
             ax[1].grid(which='both')
 
         # bins on each side to average over for smoothing
-        df = 5
-        qpd_1x = np.mean(fft_qpd_1[max_ind_x-df:max_ind_x+df])
-        qpd_2x = np.mean(fft_qpd_2[max_ind_x-df:max_ind_x+df])
-        qpd_3x = np.mean(fft_qpd_3[max_ind_x-df:max_ind_x+df])
-        qpd_4x = np.mean(fft_qpd_4[max_ind_x-df:max_ind_x+df])
-        qpd_1y = np.mean(fft_qpd_1[max_ind_y-df:max_ind_y+df])
-        qpd_2y = np.mean(fft_qpd_2[max_ind_y-df:max_ind_y+df])
-        qpd_3y = np.mean(fft_qpd_3[max_ind_y-df:max_ind_y+df])
-        qpd_4y = np.mean(fft_qpd_4[max_ind_y-df:max_ind_y+df])
-        qpd_1n = np.mean(fft_qpd_1[max_ind_n-df:max_ind_n+df])
-        qpd_2n = np.mean(fft_qpd_2[max_ind_n-df:max_ind_n+df])
-        qpd_3n = np.mean(fft_qpd_3[max_ind_n-df:max_ind_n+df])
-        qpd_4n = np.mean(fft_qpd_4[max_ind_n-df:max_ind_n+df])
+        df = 0
+        qpd_1x = np.mean(fft_qpd_1[max_ind_x-df:max_ind_x+df+1])
+        qpd_2x = np.mean(fft_qpd_2[max_ind_x-df:max_ind_x+df+1])
+        qpd_3x = np.mean(fft_qpd_3[max_ind_x-df:max_ind_x+df+1])
+        qpd_4x = np.mean(fft_qpd_4[max_ind_x-df:max_ind_x+df+1])
+        qpd_1y = np.mean(fft_qpd_1[max_ind_y-df:max_ind_y+df+1])
+        qpd_2y = np.mean(fft_qpd_2[max_ind_y-df:max_ind_y+df+1])
+        qpd_3y = np.mean(fft_qpd_3[max_ind_y-df:max_ind_y+df+1])
+        qpd_4y = np.mean(fft_qpd_4[max_ind_y-df:max_ind_y+df+1])
+        qpd_1n = np.mean(fft_qpd_1[max_ind_n-df:max_ind_n+df+1])
+        qpd_2n = np.mean(fft_qpd_2[max_ind_n-df:max_ind_n+df+1])
+        qpd_3n = np.mean(fft_qpd_3[max_ind_n-df:max_ind_n+df+1])
+        qpd_4n = np.mean(fft_qpd_4[max_ind_n-df:max_ind_n+df+1])
 
         # 4x2 matrix, rows are quadrants and columns are f_x and f_y
         signal_mat = np.array(((qpd_1x,qpd_1y),
@@ -1684,7 +1700,7 @@ class AggregateData:
         # for simplicity drop the imaginary parts. Power should be negligible, but check anyway
         print('Fraction of power in imaginary parts to be discarded:')
         print('Q1: {:.3f}, Q2: {:.3f}, Q3: {:.3f}, Q4: {:.3f}'\
-              .format(*np.square(np.imag(signal_mat)/np.abs(signal_mat)).flatten()))
+              .format(*(np.sum(np.imag(signal_mat)**2,axis=1)/np.sum(np.abs(signal_mat)**2,axis=1)).flatten()))
         signal_mat = np.real(signal_mat)
 
         # compute the left inverse, which gives the transformation to pure x and y, then normalize
@@ -1717,10 +1733,11 @@ class AggregateData:
             cross_coupling(self.agg_dict,diag_mat,p_x=p_x,p_y=p_y,plot_inds=fit_inds,plot_null=True)
             visual_diag_mat(diag_mat)
 
-        print('Diagonalization complete!')
-        print('Copy the following into the config.yaml files for the relevant datasets:')
-        print('qpd_diag_mat: [[{:.8f},{:.8f},{:.8f},{:.8f}],[{:.8f},{:.8f},{:.8f},{:.8f}],[{:.8f},{:.8f},{:.8f},{:.8f}],[{:.8f},{:.8f},{:.8f},{:.8f}]]'\
-              .format(*[i for i in diag_mat.flatten()]))
+        if not failed:
+            print('Diagonalization complete!')
+            print('Copy the following into the config.yaml files for the relevant datasets:')
+            print('qpd_diag_mat: [[{:.8f},{:.8f},{:.8f},{:.8f}],[{:.8f},{:.8f},{:.8f},{:.8f}],[{:.8f},{:.8f},{:.8f},{:.8f}],[{:.8f},{:.8f},{:.8f},{:.8f}]]'\
+                .format(*[i for i in diag_mat.flatten()]))
         return diag_mat
 
 
@@ -1740,6 +1757,8 @@ class AggregateData:
         fund_inds = []
         good_inds = []
         lightweights = []
+        diagonalize = []
+        subtracted = []
         for object in object_list:
             ffts.append(object.agg_dict['qpd_ffts_full'].shape[-1]>2)
             asds.append(object.qpd_asds.shape[-1]>2)
@@ -1748,6 +1767,8 @@ class AggregateData:
             fund_inds.append(object.agg_dict['fund_ind'])
             good_inds.append(object.agg_dict['good_inds'])
             lightweights.append(object.lightweight)
+            diagonalize.append(object.diagonalize)
+            subtracted.append(object.noise_subtracted)
         if not (all(np.isclose(np.array(fsamps)-fsamps[0],0)) or \
                 all(np.isclose(np.array(nsamps)-nsamps[0],0))):
             print('Error: inconsistent number of samples or sampling frequency between objects!')
@@ -1758,6 +1779,12 @@ class AggregateData:
             return
         if not all(np.array(lightweights)==lightweights[0]):
             print('Error: cannot merge a lightweight object with a full object!')
+            return
+        if not all(np.array(diagonalize)==diagonalize[0]):
+            print('Error: cannot merge under different diagonalization conditions!')
+            return
+        if not all(np.array(subtracted)==subtracted[0]):
+            print('Error: cannot merge under different noise subtraction conditions!')
             return
         merge_asds = True
         if not all(asds):
@@ -1773,6 +1800,8 @@ class AggregateData:
             object2 = object_list[1]
             # just add them all together
             self.lightweight = object1.lightweight
+            self.diagonalize = object1.diagonalize
+            self.noise_subtracted = object1.noise_subtracted
             self.data_dirs = np.array(list(object1.data_dirs) + list(object2.data_dirs))
             self.file_prefixes = np.array(list(object1.file_prefixes) + list(object2.file_prefixes))
             self.descrips = np.array(list(object1.descrips) + list(object2.descrips))
@@ -1783,6 +1812,7 @@ class AggregateData:
             self.diam_bead = np.array(list(object1.diam_bead) + list(object2.diam_bead))
             self.mass_bead = np.array(list(object1.mass_bead) + list(object2.mass_bead))
             self.qpd_diag_mats = np.array(list(object1.qpd_diag_mats) + list(object2.qpd_diag_mats))
+            self.configs = np.array(list(object1.configs) + list(object2.configs))
             self.bad_files = np.array(list(object1.bad_files) + list(object2.bad_files))
             self.error_logs = np.array(list(object1.error_logs) + list(object2.error_logs))
             self.file_data_objs = object1.file_data_objs + object2.file_data_objs
@@ -1858,7 +1888,7 @@ class AggregateData:
                     f.create_dataset('run_params/'+attr_name, data=attr_value)
                 elif isinstance(attr_value, np.ndarray):
                     # add numpy arrays of strings or anything else
-                    if attr_value.dtype.type is np.str_:
+                    if (attr_value.dtype.type is np.str_) or (attr_value.dtype.type is np.object_):
                         f.create_dataset('run_params/'+attr_name, data=np.array(attr_value,dtype='S'))
                     else:
                         f.create_dataset('run_params/'+attr_name, data=attr_value)
@@ -1891,6 +1921,10 @@ class AggregateData:
 
             # load the run parameters
             self.lightweight = bool(np.array(f['run_params/lightweight']))
+            self.diagonalize = bool(np.array(f['run_params/diagonalize']))
+            self.noise_subtracted = bool(np.array(f['run_params/noise_subtracted']))
+            confs = np.array(f['run_params/configs'],dtype=np.str_)
+            self.configs = np.array([ast.literal_eval(conf) for conf in confs])
             self.data_dirs = np.array(f['run_params/data_dirs'],dtype=np.str_)
             self.file_prefixes = np.array(f['run_params/file_prefixes'],dtype=np.str_)
             self.descrips = np.array(f['run_params/descrips'],dtype=np.str_)
