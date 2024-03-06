@@ -226,7 +226,7 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None,plot_n
     ax.set_xlim([280,420])
     ax.set_ylim([1e-1,1e2])
     ax.set_xlabel('Frequency [Hz]')
-    ax.set_ylabel('ASD [1/$\sqrt{\mathrm{Hz}}$]')
+    ax.set_ylabel('ASD [arb/$\sqrt{\mathrm{Hz}}$]')
     ax.set_title('QPD diagonalization')
     ax.grid(which='both')
     ax.legend(ncol=3+plot_null*1)
@@ -839,7 +839,8 @@ def mles_vs_time(agg_dict,descrip=None,sensor='qpd',axis_ind=0,t_bin_width=None)
     return fig,ax
 
 
-def alpha_limit(agg_dict,descrip=None,sensor='qpd'):
+def alpha_limit(agg_dict,descrip=None,sensor='qpd',title=None,lim_pos=None,lim_neg=None,\
+                lim_abs=None,lim_noise=None):
     '''
     Plot the alpha-lambda limit for a dataset.
     '''
@@ -847,39 +848,57 @@ def alpha_limit(agg_dict,descrip=None,sensor='qpd'):
     if descrip is None:
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
 
-    # compute the limit for this dataset
-    likelihood_coeffs = fit_alpha_all_files(agg_dict,sensor=sensor)
-    likelihood_coeffs = combine_likelihoods_over_dim(likelihood_coeffs,which='file')
+    limit_args = [lim_pos,lim_neg]
+    
     lambdas = agg_dict['template_params'][0]
-    likelihood_coeffs_all = group_likelihoods_by_test(likelihood_coeffs)
-    limit_pos,limit_neg = get_alpha_vs_lambda(likelihood_coeffs_all,lambdas)
+    if all(a is None for a in limit_args):
+        # compute the limit for this dataset
+        likelihood_coeffs = fit_alpha_all_files(agg_dict,sensor=sensor)
+        likelihood_coeffs = combine_likelihoods_over_dim(likelihood_coeffs,which='file')
+        likelihood_coeffs = np.sum(likelihood_coeffs[:,:2,...],axis=1)
+        likelihood_coeffs[...,-1] = -likelihood_coeffs[...,1]/(2.*likelihood_coeffs[...,0])
+        lim_abs = get_abs_alpha_vs_lambda(likelihood_coeffs,lambdas)
+        likelihood_coeffs = combine_likelihoods_over_dim(likelihood_coeffs,which='harm')
+        lim_pos,lim_neg = get_alpha_vs_lambda(likelihood_coeffs,lambdas)
+        
 
     # get the other previously saved limits
     lims = h5py.File('/home/clarkeh/limits_all.h5','r')
 
-    fig,ax = plt.subplots()
+    fig,ax = plt.subplots(figsize=(6,5))
     colors = style.library['fivethirtyeight']['axes.prop_cycle'].by_key()['color']
-    ax.loglog(lambdas*1e6,np.array(limit_pos),ls='-',lw=2,color=colors[0],alpha=0.6,label=r'This result $\alpha>0$')
-    ax.loglog(lambdas*1e6,np.array(limit_neg),ls='--',lw=2,color=colors[1],alpha=0.6,label=r'This result $\alpha<0$')
+    ax.loglog(lambdas*1e6,np.array(lim_pos),ls='--',lw=2,color=colors[0],alpha=0.6,label=r'This result $\alpha>0$')
+    ax.loglog(lambdas*1e6,np.array(lim_neg),ls='-.',lw=2,color=colors[0],alpha=0.6,label=r'This result $\alpha<0$')
+    if lim_abs is not None:
+        ax.loglog(lambdas*1e6,np.array(lim_abs),ls=':',lw=2,color=colors[0],alpha=0.6,label=r'This result $|\alpha|$')
+    if lim_noise is not None:
+        ax.loglog(lambdas*1e6,np.array(lim_noise),ls='-',lw=2,color=colors[3],alpha=0.6,label='Noise limit')
     ax.loglog(np.array(lims['wilson/lambda_pos'])*1e6,np.array(lims['wilson/alpha_pos']),\
-              ls='-',lw=2,color=colors[2],alpha=0.6,label=r'Wilson $\alpha>0$')
+              ls='--',lw=2,color=colors[1],alpha=0.6,label=r'Wilson $\alpha>0$')
     ax.loglog(np.array(lims['wilson/lambda_neg'])*1e6,np.array(lims['wilson/alpha_neg']),\
-              ls='--',lw=2,color=colors[3],alpha=0.6,label=r'Wilson $\alpha<0$')
+              ls='-.',lw=2,color=colors[2],alpha=0.6,label=r'Wilson $\alpha<0$')
     ax.loglog(np.array(lims['best/lambda'])*1e6,np.array(lims['best/alpha']),\
-              ls=':',lw=2,color=colors[4],alpha=0.6)
+              ls=(0,(1,1)),lw=2,color=colors[4],alpha=0.8)
     ax.fill_between(np.array(lims['best/lambda'])*1e6,np.array(lims['best/alpha']),\
                     1e15*np.ones_like(np.array(lims['best/alpha'])),color=colors[4],alpha=0.2)
-    ax.set_title(r'{{{}}} limits from {{{}}} files for {{{}}}'\
-                 .format(sensor.upper(),len(agg_dict['timestamp']),descrip))
+    if title is None:
+        ax.set_title(r'{{{}}} limits from {{{}}} files for {{{}}}'\
+                    .format(sensor.upper(),len(agg_dict['timestamp']),descrip))
+    else:
+        ax.set_title(title)
     ax.set_xlabel(r'$\lambda$ [$\mu$m]')
     ax.set_ylabel(r'$\alpha$')
     ax.set_xlim([1e0,1e2])
     ax.set_ylim([1e2,1e12])
     ax.grid(which='both')
-    ax.legend(ncol=2)
+    ax.legend(ncol=3-int(all(a is None for a in limit_args)))
+    print(int(all(a is None for a in limit_args)))
 
-    del colors,lims,likelihood_coeffs,lambdas,likelihood_coeffs_all,limit_pos,\
-        limit_neg,descrip,sensor
+    del colors,lims,lambdas,lim_pos,lim_neg,lim_abs,lim_noise,descrip,sensor
+    try:
+        del likelihood_coeffs,likelihood_coeffs_all
+    except NameError:
+        pass
     
     return fig,ax
 
@@ -962,7 +981,7 @@ def limit_vs_integration(agg_dict,descrip=None,sensor='qpd'):
 
 
 def mle_fingerprint(agg_dict,mle_result,file_inds=None,lamb=1e-5,single_beta=False,num_gammas=1,\
-                    delta_means=[0.1,0.1],axes=['x','y'],channel='signal',log=True):
+                    delta_means=[0.1,0.1],axes=['x','y'],harms=[],channel='signal',log=True):
     '''
     Plot the measured and fitted spectral fingerprints, showing the contribution of
     background and signal to the total measurement.
@@ -979,7 +998,14 @@ def mle_fingerprint(agg_dict,mle_result,file_inds=None,lamb=1e-5,single_beta=Fal
     if 'y' not in axes:
         second_axis = 1
 
-    harm_labels = ['{:.0f}'.format(i) for i in agg_dict['freqs'][agg_dict['good_inds']]]
+    # choose which harmonics to include
+    if harms==[]:
+        harm_inds = np.array(range(len(agg_dict['good_inds'])))
+    else:
+        harms_full = agg_dict['freqs'][agg_dict['good_inds']]
+        harm_inds = [np.argmin(np.abs(3*h - harms_full)) for h in harms]
+
+    harm_labels = np.array(['{:.0f}'.format(i) for i in agg_dict['freqs'][agg_dict['good_inds']]])[harm_inds]
     
     # work with a single value of lambda
     lambdas = agg_dict['template_params'][0]
@@ -995,8 +1021,9 @@ def mle_fingerprint(agg_dict,mle_result,file_inds=None,lamb=1e-5,single_beta=Fal
     background_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,3,:]
     background_var = (1./(2.*num_sb))*np.sum(np.real(background_sb_ffts)**2+np.imag(background_sb_ffts)**2,axis=-1)
 
-    alpha,beta,gammas,deltas = reshape_nll_args(x=mle_result,data_shape=qpd_ffts.shape,alpha=None,single_beta=single_beta,\
-                                                num_gammas=num_gammas,delta_means=delta_means,axes=axes)
+    alpha,beta,gammas,deltas = reshape_nll_args(x=mle_result,data_shape=qpd_ffts[...,harm_inds].shape,\
+                                                alpha=None,single_beta=single_beta,num_gammas=num_gammas,\
+                                                delta_means=delta_means,axes=axes)
     
     # plot the real and imaginary parts separately unless doing a log plot of magnitudes
     if log:
@@ -1006,29 +1033,30 @@ def mle_fingerprint(agg_dict,mle_result,file_inds=None,lamb=1e-5,single_beta=Fal
     
     # swap mean and absolute value to get the measurement and fits to match
     if channel=='signal':
-        noise = np.sqrt(data_var)
-        measurements = qpd_ffts[:,first_axis:second_axis,:]
-        signal_fits = alpha*yuk_ffts[:,first_axis:second_axis,:]
-        background_fits = beta*gammas*qpd_ffts[:,3,np.newaxis,:]
+        noise = np.sqrt(data_var[...,harm_inds])
+        measurements = qpd_ffts[:,first_axis:second_axis,harm_inds]
+        signal_fits = alpha*yuk_ffts[:,first_axis:second_axis,harm_inds]
+        background_fits = beta*gammas*qpd_ffts[:,np.newaxis,3,harm_inds]
     elif channel=='background':
-        noise = np.sqrt(background_var[:,np.newaxis])
-        measurements = qpd_ffts[:,3,np.newaxis,:]
-        signal_fits = alpha*np.sum(deltas*yuk_ffts[:,first_axis:second_axis,:],axis=1)[:,np.newaxis]
-        background_fits = beta*qpd_ffts[:,3,np.newaxis,:]
+        noise = np.sqrt(background_var[:,np.newaxis,harm_inds])
+        measurements = qpd_ffts[:,np.newaxis,3,harm_inds]
+        signal_fits = alpha*np.sum(deltas*yuk_ffts[:,first_axis:second_axis,harm_inds],axis=1)[:,np.newaxis]
+        background_fits = beta*qpd_ffts[:,np.newaxis,3,harm_inds]
         axes = ['null']
     
     fig,axs = plt.subplots(len(axes),2-int(log),figsize=(6,2*len(axes)+2),sharex=True,sharey='row',squeeze=False)
-    colors = style.library['fivethirtyeight']['axes.prop_cycle'].by_key()['color'] # seaborn-v0_8-bright Solarize_Light2
+    # colors = style.library['fivethirtyeight']['axes.prop_cycle'].by_key()['color']
+    colors = [plt.get_cmap('turbo',7)(i) for i in range(1,6)]
     titles = ['Real','Imaginary']
 
     for i in range(np.shape(axs)[0]):
         for j,func in enumerate(funcs):
-            axs[i,j].bar(harm_labels,np.mean(noise,axis=0)[i],width=0.75,color=colors[0],label='Noise',zorder=11)
-            axs[i,j].bar(harm_labels,np.mean(-noise,axis=0)[i],width=0.75,color=colors[0],zorder=10)
+            axs[i,j].bar(harm_labels,np.mean(noise,axis=0)[i],width=0.75,color=colors[3],label='Noise',zorder=11)
+            axs[i,j].bar(harm_labels,np.mean(-noise,axis=0)[i],width=0.75,color=colors[3],zorder=10)
             axs[i,j].bar(harm_labels,np.mean(func(measurements),axis=0)[i],width=0.5,color=colors[1],label='Measurement',zorder=12)
             axs[i,j].bar(harm_labels,np.mean(func(signal_fits),axis=0)[i],width=0.25,color=colors[2],label='Yukawa fit',zorder=14)
             axs[i,j].bar(harm_labels,np.mean(func(background_fits),axis=0)[i]+np.mean(func(signal_fits),axis=0)[i],\
-                         width=0.25,color=colors[5],label='Background fit',zorder=13)
+                         width=0.25,color=colors[0],label='Background fit',zorder=13)
             if j==0:
                 if axes[i]=='null':
                     axs[i,j].set_ylabel('Force in null [arb]'.format(axes[i]))
