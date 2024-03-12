@@ -458,17 +458,18 @@ def reshape_nll_args(x,data_shape,alpha,single_beta=False,num_gammas=1,delta_mea
     if not single_beta:
         num_betas = data_shape[2]
 
-    # extract beta and gamma aarrays from the input vector, constructing the full
+    # extract beta and gamma arrays from the input vector, constructing the full
     # complex numbers from the real and imaginary parts for the betas
     betas_split = x[offset:offset+2*num_betas]
     beta = betas_split[0::2] + 1j*betas_split[1::2]
-    gammas = x[offset+2*num_betas:]
+    gammas = x[offset+2*num_betas:-2]
+    deltas = x[-2:]
 
     # # reshape array of betas
     beta = beta[np.newaxis,np.newaxis,:]
 
     # reshape array of gammas
-    gammas = gammas.reshape(-1,len(axes))
+    gammas = gammas.reshape(-1,len(axes),data_shape[2])
 
     if spline:
         times = np.arange(0,num_datasets,np.ceil(num_datasets/gammas.shape[0]))
@@ -476,10 +477,10 @@ def reshape_nll_args(x,data_shape,alpha,single_beta=False,num_gammas=1,delta_mea
         gammas = cs(np.arange(num_datasets))
         gammas = gammas[...,np.newaxis]
     else:
-        gammas = gammas.repeat(np.ceil(num_datasets/gammas.shape[0]),axis=0)[:num_datasets,:,np.newaxis]
+        gammas = gammas.repeat(np.ceil(num_datasets/gammas.shape[0]),axis=0)[:num_datasets,:]
     
     # reshape array of deltas
-    deltas = np.array(delta_means)[np.newaxis,first_axis:second_axis,np.newaxis]
+    deltas = np.array(deltas)[np.newaxis,first_axis:second_axis,np.newaxis]
 
     return alpha,beta,gammas,deltas
 
@@ -558,7 +559,10 @@ def nll_with_background(agg_dict,file_inds=None,alpha=None,lamb=1e-5,single_beta
         nll_signal = np.real(num_signal)**2/(2*data_var) \
                    + np.imag(num_signal)**2/(2*data_var)
         
-        return np.sum(nll_background) + np.sum(nll_signal)
+        # constraints on the nuisance parameters
+        nll_nuisance = deltas**2/(2*np.array(delta_means)[np.newaxis,:,np.newaxis]**2)
+        
+        return np.sum(nll_background) + np.sum(nll_signal) + np.sum(nll_nuisance)
     
     return nll_func
 
@@ -572,15 +576,18 @@ def unconditional_mle(agg_dict,file_inds=None,lamb=1e-5,single_beta=False,\
     alpha and beta.
     '''
     num_betas = 1
+    num_harms = (np.shape(agg_dict['qpd_ffts'])[-1])
     if single_beta==False:
-        num_betas = (np.shape(agg_dict['qpd_ffts'])[-1])
+        num_betas = num_harms
     beta_bounds = ((-10,10) for i in range(2*num_betas))
-    gamma_bounds = ((-1e3,1e3) for i in range(len(axes)*num_gammas))
+    gamma_bounds = ((-1e4,1e4) for i in range(len(axes)*num_gammas*num_harms))
     alpha_bound = 1e10*np.exp(2e-5/lamb)
+    delta_bounds = ((-3*delta_means[i],3*delta_means[i]) for i in range(2))
     nll_func = nll_with_background(agg_dict,file_inds,None,lamb,single_beta,num_gammas,\
                                    delta_means,spline,axes,harms)
-    result = iminimize(nll_func,[1e9]+[1,0]*num_betas+[1]*len(axes)*num_gammas,\
-                       bounds=((-alpha_bound,alpha_bound),*beta_bounds,*gamma_bounds))
+    result = iminimize(nll_func,[1e9]+[1,0]*num_betas+[0]*len(axes)*num_gammas*num_harms+[0]*2,\
+                       bounds=((-alpha_bound,alpha_bound),*beta_bounds,*gamma_bounds,*delta_bounds),\
+                       options={'maxfun':100000})
     if result.success==False:
         print('Minimization failed!')
     return result
@@ -594,14 +601,17 @@ def conditional_mle(agg_dict,file_inds=None,alpha=1e8,lamb=1e-5,single_beta=Fals
     Returns the conditional maximum likelihood estimate for beta.
     '''
     num_betas = 1
+    num_harms = (np.shape(agg_dict['qpd_ffts'])[-1])
     if single_beta==False:
-        num_betas = (np.shape(agg_dict['qpd_ffts'])[-1])
+        num_betas = num_harms
     beta_bounds = ((-10,10) for i in range(2*num_betas))
-    gamma_bounds = ((-1e3,1e3) for i in range(len(axes)*num_gammas))
+    gamma_bounds = ((-1e2,1e2) for i in range(len(axes)*num_gammas*num_harms))
+    delta_bounds = ((-3*delta_means[i],3*delta_means[i]) for i in range(2))
     nll_func = nll_with_background(agg_dict,file_inds,alpha,lamb,single_beta,num_gammas,\
                                    delta_means,spline,axes,harms)
-    result = iminimize(nll_func,[1,0]*num_betas+[1]*len(axes)*num_gammas,\
-                       bounds=(*beta_bounds,*gamma_bounds))
+    result = iminimize(nll_func,[1,0]*num_betas+[0]*len(axes)*num_gammas*num_harms+[0]*2,\
+                       bounds=(*beta_bounds,*gamma_bounds,*delta_bounds),\
+                       options={'maxfun':100000})
     if result.success==False:
         print('Minimization failed!')
     return result
