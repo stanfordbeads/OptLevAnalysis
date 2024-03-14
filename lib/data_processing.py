@@ -1119,6 +1119,7 @@ class AggregateData:
         quad_amps = []
         quad_phases = []
         mot_likes = []
+        axis_angles = []
 
         for i,f in enumerate(self.file_data_objs):
             timestamp.append(f.times[0]*1e-9)
@@ -1144,6 +1145,11 @@ class AggregateData:
             quad_amps.append(f.quad_amps)
             quad_phases.append(f.quad_phases)
             mot_likes.append(f.motion_likeness)
+            axis_angles.append(np.arccos(np.dot(f.qpd_diag_mat[0]*f.force_cal_factors_qpd[0],\
+                                                f.qpd_diag_mat[1]*f.force_cal_factors_qpd[1])\
+                                                /(np.linalg.norm(f.qpd_diag_mat[0]*f.force_cal_factors_qpd[0])\
+                                                *np.linalg.norm(f.qpd_diag_mat[1]*f.force_cal_factors_qpd[1]))))
+            # axis_angles.append()
             if lightweight:
                 # delete the object once data has been extracted
                 self.file_data_objs[i] = FileData()
@@ -1176,6 +1182,7 @@ class AggregateData:
         quad_amps = np.array(quad_amps)
         quad_phases = np.array(quad_phases)
         mot_likes = np.array(mot_likes)
+        axis_angles = np.array(axis_angles)
 
         # add numpy arrays to the dictionary
         agg_dict['times'] = times
@@ -1201,6 +1208,7 @@ class AggregateData:
         agg_dict['quad_amps'] = quad_amps
         agg_dict['quad_phases'] = quad_phases
         agg_dict['mot_likes'] = mot_likes
+        agg_dict['axis_angles'] = axis_angles
 
         self.agg_dict = agg_dict
         print('Done building dictionary.')
@@ -1699,6 +1707,7 @@ class AggregateData:
 
         # for simplicity drop the imaginary parts. Power should be negligible, but check anyway
         print('Fraction of power in imaginary parts to be discarded:')
+        print(signal_mat)
         print('Q1: {:.3f}, Q2: {:.3f}, Q3: {:.3f}, Q4: {:.3f}'\
               .format(*(np.sum(np.imag(signal_mat)**2,axis=1)/np.sum(np.abs(signal_mat)**2,axis=1)).flatten()))
         signal_mat = np.real(signal_mat)
@@ -1735,6 +1744,8 @@ class AggregateData:
 
         if not failed:
             print('Diagonalization complete!')
+            print('Angle between x and y: {:.1f} degrees'\
+                  .format(np.arccos(np.dot(diag_mat[0],diag_mat[1])/(np.linalg.norm(diag_mat[0])*np.linalg.norm(diag_mat[1])))*180./np.pi))
             print('Copy the following into the config.yaml files for the relevant datasets:')
             print('qpd_diag_mat: [[{:.8f},{:.8f},{:.8f},{:.8f}],[{:.8f},{:.8f},{:.8f},{:.8f}],[{:.8f},{:.8f},{:.8f},{:.8f}],[{:.8f},{:.8f},{:.8f},{:.8f}]]'\
                 .format(*[i for i in diag_mat.flatten()]))

@@ -892,7 +892,6 @@ def alpha_limit(agg_dict,descrip=None,sensor='qpd',title=None,lim_pos=None,lim_n
     ax.set_ylim([1e2,1e12])
     ax.grid(which='both')
     ax.legend(ncol=3-int(all(a is None for a in limit_args)))
-    print(int(all(a is None for a in limit_args)))
 
     del colors,lims,lambdas,lim_pos,lim_neg,lim_abs,lim_noise,descrip,sensor
     try:
@@ -981,7 +980,7 @@ def limit_vs_integration(agg_dict,descrip=None,sensor='qpd'):
 
 
 def mle_fingerprint(agg_dict,mle_result,file_inds=None,lamb=1e-5,single_beta=False,num_gammas=1,\
-                    delta_means=[0.1,0.1],axes=['x','y'],harms=[],channel='signal',log=True):
+                    delta_means=[0.1,0.1],axes=['x','y'],harms=[],channel='motion',log=True):
     '''
     Plot the measured and fitted spectral fingerprints, showing the contribution of
     background and signal to the total measurement.
@@ -1032,12 +1031,12 @@ def mle_fingerprint(agg_dict,mle_result,file_inds=None,lamb=1e-5,single_beta=Fal
         funcs = [np.real,np.imag]
     
     # swap mean and absolute value to get the measurement and fits to match
-    if channel=='signal':
+    if channel=='motion':
         noise = np.sqrt(data_var[...,harm_inds])
         measurements = qpd_ffts[:,first_axis:second_axis,harm_inds]
         signal_fits = alpha*yuk_ffts[:,first_axis:second_axis,harm_inds]
         background_fits = beta*gammas*qpd_ffts[:,np.newaxis,3,harm_inds]
-    elif channel=='background':
+    elif channel=='null':
         noise = np.sqrt(background_var[:,np.newaxis,harm_inds])
         measurements = qpd_ffts[:,np.newaxis,3,harm_inds]
         signal_fits = alpha*np.sum(deltas*yuk_ffts[:,first_axis:second_axis,harm_inds],axis=1)[:,np.newaxis]

@@ -1,12 +1,14 @@
 import numpy as np
 from scipy.optimize import minimize
 import iminuit.minimize as iminimize
+from iminuit import Minuit
 from scipy.stats import chi2,norm
 from scipy.interpolate import CubicSpline
 from iminuit import cost,Minuit
 from joblib import Parallel, delayed
 from tqdm import tqdm
 from numba import jit
+import warnings
 from funcs import *
 
 # ************************************************************************ #
@@ -430,7 +432,14 @@ def get_alpha_scale(likelihood_coeffs,lambdas):
     return 10**np.array((median,lower_1s,upper_1s))
 
 
-def reshape_nll_args(x,data_shape,alpha,single_beta=False,num_gammas=1,delta_means=[0.1,0.1],\
+# **************************************************************************** #
+# Everything above here is for setting limits with signal-only likelihoods
+# functions. Everything below here is for setting limits with the likelihood
+# function which includes the in-situ measurement of scattered-light backgrounds.
+# **************************************************************************** #
+
+
+def reshape_nll_args(x,data_shape,num_gammas=1,delta_means=[0.1,0.1],\
                      spline=False,axes=['x','y'],harms=[]):
     '''
     Read the arguments from the dictionary and reshape them into the correctly-shaped
@@ -447,26 +456,24 @@ def reshape_nll_args(x,data_shape,alpha,single_beta=False,num_gammas=1,delta_mea
     if 'y' not in axes:
         second_axis = 1
 
-    # for unconditional mle alpha is the first element and others are offset by 1
-    offset = 0
-    if alpha is None:
-        alpha = x[0]
-        offset = 1
-
-    # get number of betas
-    num_betas = 1
-    if not single_beta:
-        num_betas = data_shape[2]
+    # # get number of betas
+    # num_betas = 1
+    # if not single_beta:
+    #     num_betas = data_shape[2]
 
     # extract beta and gamma arrays from the input vector, constructing the full
     # complex numbers from the real and imaginary parts for the betas
-    betas_split = x[offset:offset+2*num_betas]
-    beta = betas_split[0::2] + 1j*betas_split[1::2]
-    gammas = x[offset+2*num_betas:-2]
-    deltas = x[-2:]
+    # betas_split = x[offset:offset+2*num_betas]
+    # beta = betas_split[0::2] + 1j*betas_split[1::2]
+    # gammas = x[offset+2*num_betas:-2]
+    # deltas = x[-2:]
 
-    # # reshape array of betas
-    beta = beta[np.newaxis,np.newaxis,:]
+    # # # reshape array of betas
+    # beta = beta[np.newaxis,np.newaxis,:]
+    
+    alpha = x[0]
+    deltas = x[1:3]
+    gammas = x[3:]
 
     # reshape array of gammas
     gammas = gammas.reshape(-1,len(axes),data_shape[2])
@@ -482,11 +489,11 @@ def reshape_nll_args(x,data_shape,alpha,single_beta=False,num_gammas=1,delta_mea
     # reshape array of deltas
     deltas = np.array(deltas)[np.newaxis,first_axis:second_axis,np.newaxis]
 
-    return alpha,beta,gammas,deltas
+    return alpha,gammas,deltas
 
 
-def nll_with_background(agg_dict,file_inds=None,alpha=None,lamb=1e-5,single_beta=False,\
-                        num_gammas=1,delta_means=[0.1,0.1],spline=False,axes=['x','y'],harms=[]):
+def nll_with_background(agg_dict,file_inds=None,lamb=1e-5,num_gammas=1,delta_means=[0.1,0.1],\
+                        spline=False,axes=['x','y'],harms=[]):
     '''
     Implementation of the negative log-likelihood function including both the signal
     model and an in-situ background measurement on some additional data stream. Extracts
@@ -536,171 +543,109 @@ def nll_with_background(agg_dict,file_inds=None,alpha=None,lamb=1e-5,single_beta
     # get the templates for each file/axis/harm
     signal = yuk_ffts[:,first_axis:second_axis,harm_inds]
 
-    # must define alpha in this namespace
-    alpha_arg = alpha
-
     def nll_func(x):
         '''
         Function to be minimized.
         '''
 
         # all parameter arrays should be put in the shape (files,axes,harmonics)
-        alpha,beta,gammas,deltas = reshape_nll_args(x,data.shape,alpha_arg,single_beta,num_gammas,delta_means,spline,axes)
+        alpha,gammas,deltas = reshape_nll_args(x,data.shape,num_gammas,delta_means,spline,axes,harms)
 
-        # numerators of the Gaussian terms for signal and backround
-        num_background = background[:,0,:] - beta[:,0,:]*background[:,0,:] - alpha*np.sum(deltas*signal,axis=1)
-        num_signal = data - alpha*signal - beta*gammas*background
+        # # numerators of the Gaussian terms for signal and backround
+        # num_background = background[:,0,:] - beta[:,0,:]*background[:,0,:] - alpha*np.sum(deltas*signal,axis=1)
+        # num_signal = data - alpha*signal - beta*gammas*background
 
-        # the background channel NLL is defined for only a single background axis, so has shape (files,harmonics)
-        nll_background = np.real(num_background)**2/(2*background_var) \
-                       + np.imag(num_background)**2/(2*background_var)
+        # # the background channel NLL is defined for only a single background axis, so has shape (files,harmonics)
+        # nll_background = np.real(num_background)**2/(2*background_var) \
+        #                + np.imag(num_background)**2/(2*background_var)
 
-        # the signal channel NLL has a shape before summing of (files,axes,harmonics)
-        nll_signal = np.real(num_signal)**2/(2*data_var) \
-                   + np.imag(num_signal)**2/(2*data_var)
+        # # the signal channel NLL has a shape before summing of (files,axes,harmonics)
+        # nll_signal = np.real(num_signal)**2/(2*data_var) \
+        #            + np.imag(num_signal)**2/(2*data_var)
+
+        num_signal = data - alpha*(1.-deltas)*signal - gammas*(background - alpha*np.sum(deltas*signal,axis=1)[:,np.newaxis,:])
+        nll_signal = np.real(num_signal)**2/(2*data_var) + np.imag(num_signal)**2/(2*data_var)
+
+        # convert the gammas into the spherical coordinate angles
+        thetas = np.arctan(gammas[:,0,:]/gammas[:,1,:])[:,np.newaxis,:]
+        sigma_phi = 100.*np.pi/180.
+        phis = np.arctan((gammas[:,0,:]-gammas[:,1,:])/(np.sin(thetas[:,0,:])-np.cos(thetas[:,0,:])))[:,np.newaxis,:]
         
         # constraints on the nuisance parameters
-        nll_nuisance = deltas**2/(2*np.array(delta_means)[np.newaxis,:,np.newaxis]**2)
+        nll_nuisance = (deltas*np.ones_like(gammas))**2/(2*np.array(delta_means)[np.newaxis,:,np.newaxis]**2) \
+                     + (phis - np.mean(phis,axis=-1,keepdims=True))**2/(2*sigma_phi**2)
         
-        return np.sum(nll_background) + np.sum(nll_signal) + np.sum(nll_nuisance)
+        return np.sum(nll_signal) + np.sum(nll_nuisance)
     
     return nll_func
 
 
-def unconditional_mle(agg_dict,file_inds=None,lamb=1e-5,single_beta=False,\
-                      num_gammas=1,delta_means=[0.1,0.1],spline=False,\
-                      axes=['x','y'],harms=[]):
+def minimize_nll(agg_dict,file_inds=None,lamb=1e-5,num_gammas=1,\
+                 delta_means=[0.1,0.1],spline=False,axes=['x','y'],harms=[]):
     '''
     Maximize the likelihood function over both the signal and background
     parameters. Returns the unconditional maximum likelihood estimates for
     alpha and beta.
     '''
-    num_betas = 1
     num_harms = (np.shape(agg_dict['qpd_ffts'])[-1])
-    if single_beta==False:
-        num_betas = num_harms
-    beta_bounds = ((-10,10) for i in range(2*num_betas))
     gamma_bounds = ((-1e4,1e4) for i in range(len(axes)*num_gammas*num_harms))
     alpha_bound = 1e10*np.exp(2e-5/lamb)
     delta_bounds = ((-3*delta_means[i],3*delta_means[i]) for i in range(2))
-    nll_func = nll_with_background(agg_dict,file_inds,None,lamb,single_beta,num_gammas,\
+    nll_func = nll_with_background(agg_dict,file_inds,lamb,num_gammas,\
                                    delta_means,spline,axes,harms)
-    result = iminimize(nll_func,[1e9]+[1,0]*num_betas+[0]*len(axes)*num_gammas*num_harms+[0]*2,\
-                       bounds=((-alpha_bound,alpha_bound),*beta_bounds,*gamma_bounds,*delta_bounds),\
-                       options={'maxfun':100000})
-    if result.success==False:
-        print('Minimization failed!')
-    return result
-    
+    m = Minuit(nll_func,[1e9]+[0]*2+[1]*len(axes)*num_gammas*num_harms)
+    m.limits = [(-alpha_bound,alpha_bound)]+list(delta_bounds)+list(gamma_bounds)
+    m.simplex()
+    m.migrad()
+    return m
 
-def conditional_mle(agg_dict,file_inds=None,alpha=1e8,lamb=1e-5,single_beta=False,\
-                    num_gammas=1,delta_means=[0.1,0.1],spline=False,axes=['x','y'],\
-                    harms=[]):
+
+def profile_likelihood_limit(agg_dict,file_inds=None,lamb=1e-5,cl=0.95,num_points=20,\
+                             **kwargs):
     '''
-    Maximize the likelihood function over both the background only.
-    Returns the conditional maximum likelihood estimate for beta.
-    '''
-    num_betas = 1
-    num_harms = (np.shape(agg_dict['qpd_ffts'])[-1])
-    if single_beta==False:
-        num_betas = num_harms
-    beta_bounds = ((-10,10) for i in range(2*num_betas))
-    gamma_bounds = ((-1e2,1e2) for i in range(len(axes)*num_gammas*num_harms))
-    delta_bounds = ((-3*delta_means[i],3*delta_means[i]) for i in range(2))
-    nll_func = nll_with_background(agg_dict,file_inds,alpha,lamb,single_beta,num_gammas,\
-                                   delta_means,spline,axes,harms)
-    result = iminimize(nll_func,[1,0]*num_betas+[0]*len(axes)*num_gammas*num_harms+[0]*2,\
-                       bounds=(*beta_bounds,*gamma_bounds,*delta_bounds),\
-                       options={'maxfun':100000})
-    if result.success==False:
-        print('Minimization failed!')
-    return result
-
-
-def q_with_background(alpha,uncond_nll,agg_dict,file_inds=None,\
-                      lamb=1e-5,**kwargs):
-    '''
-    Function to compute the profile likelihood ratio test statistic for an exclusion
-    for a given value of alpha.
-    '''
-    cond_res = conditional_mle(agg_dict,file_inds,alpha=alpha,lamb=lamb,**kwargs)
-    cond_nll = cond_res.fun
-    q_alpha = 2.*(cond_nll - uncond_nll)
-
-    print('Computed q for lambda={:.2e}...'.format(lamb))
-    
-    return q_alpha
-
-
-def z_discovery(q_disc):
-    '''
-    Return a z-score for a discovery.
+    Use the profile likelihood ratio to set an exclusion limit on alpha at the desired
+    confidence level.
     '''
 
-    return 2.*norm.ppf(chi2(1).cdf(q_disc))
-
-
-def plr_limit_func(alpha,alpha_hat,uncond_nll,agg_dict,file_inds=None,\
-                   lamb=1e-5,cl=0.95,**kwargs):
-    '''
-    DEPRECATED
-    This function's root occurs at the alpha value corresponding to an exclusion at
-    the specified confidence level.
-    '''
+    # threshold test statistic for a given confidence level, from Wilks' theorem
     con_val = chi2(1).ppf(cl)*0.5
-    val = q_with_background(alpha,alpha_hat,uncond_nll,agg_dict,file_inds=file_inds,\
-                            lamb=lamb,**kwargs) - con_val
-    
-    return val
+
+    # create the minuit object and get the MLE for alpha
+    minuit_obj = minimize_nll(agg_dict,file_inds,lamb=lamb,**kwargs)
+    alpha_hat = minuit_obj.values[0]
+
+    # profile the test statistic over alpha
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        alphas,qvals,successes = minuit_obj.mnprofile(vname=0,size=num_points,bound=2,subtract_min=True)
+        if all(np.isnan(alphas)):
+            alphas = np.array([alpha_hat])
+            qvals = np.array([0.])
+
+    print(alphas)
+
+    # we want an upper limit, so ensure we select the correct side of the profile
+    alphas_above = alphas[np.sign(alpha_hat)*alphas >= np.sign(alpha_hat)*alpha_hat]
+    qvals_above = qvals[np.sign(alpha_hat)*alphas >= np.sign(alpha_hat)*alpha_hat]
+
+    print(alphas_above)
+    print()
+
+    # get the limit on alpha from the profile likelihood
+    alpha_lim = alphas_above[np.argmin(np.abs(2*qvals_above - con_val))]
+
+    return alpha_lim
 
 
-def plr_critical_value(alpha_hat,uncond_nll,agg_dict,file_inds=None,\
-                       lamb=1e-5,cl=0.95,tol=1e-1,max_iters=3,**kwargs):
+def profile_likelihood_abs_limit(agg_dict,pos_harms,neg_harms,file_inds=None,lamb=1e-5,cl=0.95,\
+                                 num_points=20,**kwargs):
     '''
-    DEPRECATED
-    Custom root-finding function to get the value of alpha for a given confidence level.
+    Use the profile likelihood ratio to set an exclusion limit on the absolute value ofalpha
+    at the desired confidence level. Done by splitting harmonics up by the sign of alpha-hat
+    and using only those with like sign to set the limit on the corresponding sign of alpha.
+    The limit on the absolue value of alpha is then the maximum of the two limits.
     '''
-    alpha_low = alpha_hat
-    alpha_high = 10*alpha_hat
-    func_val = 2*tol
-    iter = 0
-    while np.abs(func_val)>tol:
-        alpha = (alpha_low + alpha_high)/2.
-        func_val = plr_limit_func(alpha,alpha_hat,uncond_nll,agg_dict,file_inds,\
-                                  lamb=lamb,cl=cl,**kwargs)
-        if func_val<0:
-            alpha_low = alpha
-        else:
-            alpha_high = alpha
-        iter += 1
-        if iter>max_iters:
-            break
 
-    return alpha
-
-
-def get_limit_with_background(agg_dict,file_inds=None,lamb=1e-5,cl=0.95,tol=1e-1,\
-                              max_iters=3,**kwargs):
-    '''
-    DEPRECATED
-    Find the value of alpha that is greater than 95 percent of the test statistic
-    distribution under the null hypothesis.
-    '''
-    uncond_res = unconditional_mle(agg_dict,file_inds=file_inds,lamb=lamb,**kwargs)
-    alpha_hat = uncond_res.x[0]
-    uncond_nll = uncond_res.fun
-    limit = plr_critical_value(alpha_hat,uncond_nll,agg_dict,file_inds,\
-                               lamb=lamb,cl=cl,tol=tol,max_iters=max_iters,**kwargs)
-
-    return limit
-
-
-def get_abs_limit_from_q_parabola(agg_dict,pos_harms,neg_harms,file_inds=None,\
-                                  lamb=1e-5,cl=0.95,num_points=5,**kwargs):
-    '''
-    Find the value of alpha that is greater than 95 percent of the test statistic
-    distribution under the null hypothesis
-    '''
     harms_list = [pos_harms,neg_harms]
     alpha_lims = []
     for i in range(2):
@@ -709,28 +654,82 @@ def get_abs_limit_from_q_parabola(agg_dict,pos_harms,neg_harms,file_inds=None,\
         # threshold test statistic for a given confidence level, from Wilks' theorem
         con_val = chi2(1).ppf(cl)*0.5
 
-        # compute the test statistic for a range of alphas
-        uncond_res = unconditional_mle(agg_dict,file_inds=file_inds,lamb=lamb,\
-                                       harms=harms_list[i],**kwargs)
-        alpha_hat = uncond_res.x[0]
-        uncond_nll = uncond_res.fun
-        alphas,q_vals = q_vs_alpha(alpha_hat,uncond_nll,agg_dict,file_inds,lamb,\
-                                   num_points,harms=harms_list[i],**kwargs)
-        
-        print('Got q-alpha curve for lambda={:.2e}...'.format(lamb))
+        # create the minuit object and get the MLE for alpha
+        minuit_obj = minimize_nll(agg_dict,file_inds,lamb=lamb,harms=harms_list[i],**kwargs)
+        alpha_hat = minuit_obj.values[0]
 
-        # fit a parabola with a minimum at (alpha_hat,0) which has one free parameter
-        # q = a * (alpha - alpha_hat)^2
-        # analytic solution to the least-squares fitting
-        a_hat = np.sum(q_vals*(alphas-alpha_hat)**2)/np.sum((alphas-alpha_hat)**4)
+        # profile the test statistic over alpha
+        alphas,qvals,successes = minuit_obj.mnprofile(vname=0,size=num_points,bound=2,subtract_min=True)
 
-        # value at which the parabola crosses the CL threshold
-        alpha_lims.append(alpha_hat + np.sign(alpha_hat)*np.sqrt(con_val/a_hat))
+        # we want an upper limit, so ensure we select the correct side of the profile
+        alphas_above = alphas[np.sign(alpha_hat)*alphas >= np.sign(alpha_hat)*alpha_hat]
+        qvals_above = qvals[np.sign(alpha_hat)*alphas >= np.sign(alpha_hat)*alpha_hat]
+
+        # get the limit on alpha from the profile likelihood
+        alpha_lims.append(alphas_above[np.argmin(np.abs(2*qvals_above - con_val))])
 
     return np.amax(np.abs(alpha_lims))
 
+
+# def q_with_background(alpha,uncond_nll,agg_dict,file_inds=None,\
+#                       lamb=1e-5,**kwargs):
+#     '''
+#     Function to compute the profile likelihood ratio test statistic for an exclusion
+#     for a given value of alpha.
+#     '''
+#     cond_res = conditional_mle(agg_dict,file_inds,alpha=alpha,lamb=lamb,**kwargs)
+#     cond_nll = cond_res.fval
+#     q_alpha = 2.*(cond_nll - uncond_nll)
+
+#     print('Computed q for lambda={:.2e}...'.format(lamb))
     
-def get_alpha_vs_lambda_background(agg_dict,file_inds=None,cl=0.95,num_points=5,\
+#     return q_alpha
+
+
+# def z_discovery(q_disc):
+#     '''
+#     Return a z-score for a discovery.
+#     '''
+
+#     return 2.*norm.ppf(chi2(1).cdf(q_disc))
+
+
+# def get_abs_limit_from_q_parabola(agg_dict,pos_harms,neg_harms,file_inds=None,\
+#                                   lamb=1e-5,cl=0.95,num_points=5,**kwargs):
+#     '''
+#     Find the value of alpha that is greater than 95 percent of the test statistic
+#     distribution under the null hypothesis
+#     '''
+#     harms_list = [pos_harms,neg_harms]
+#     alpha_lims = []
+#     for i in range(2):
+#         print('Running unconditional NLL minimization for lambda={:.2e}...'.format(lamb))
+
+#         # threshold test statistic for a given confidence level, from Wilks' theorem
+#         con_val = chi2(1).ppf(cl)*0.5
+
+#         # compute the test statistic for a range of alphas
+#         uncond_res = unconditional_mle(agg_dict,file_inds=file_inds,lamb=lamb,\
+#                                        harms=harms_list[i],**kwargs)
+#         alpha_hat = uncond_res.values[0]
+#         uncond_nll = uncond_res.fval
+#         alphas,q_vals = q_vs_alpha(alpha_hat,uncond_nll,agg_dict,file_inds,lamb,\
+#                                    num_points,harms=harms_list[i],**kwargs)
+        
+#         print('Got q-alpha curve for lambda={:.2e}...'.format(lamb))
+
+#         # fit a parabola with a minimum at (alpha_hat,0) which has one free parameter
+#         # q = a * (alpha - alpha_hat)^2
+#         # analytic solution to the least-squares fitting
+#         a_hat = np.sum(q_vals*(alphas-alpha_hat)**2)/np.sum((alphas-alpha_hat)**4)
+
+#         # value at which the parabola crosses the CL threshold
+#         alpha_lims.append(alpha_hat + np.sign(alpha_hat)*np.sqrt(con_val/a_hat))
+
+#     return np.amax(np.abs(alpha_lims))
+
+    
+def get_alpha_vs_lambda_background(agg_dict,file_inds=None,cl=0.95,num_points=20,\
                                    harm_list=[],**kwargs):
     '''
     Get the 95% CL limit on alpha for the range of lambda values in agg_dict.
@@ -743,16 +742,16 @@ def get_alpha_vs_lambda_background(agg_dict,file_inds=None,cl=0.95,num_points=5,
         harm_list = [[] for i in range(len(lambdas))]
     
     print('Computing the limit at each lambda in parallel...')
-    limit = Parallel(n_jobs=len(lambdas))(delayed(get_limit_from_q_parabola)\
+    limit = Parallel(n_jobs=len(lambdas))(delayed(profile_likelihood_limit)\
                                           (agg_dict,file_inds,lamb,cl,num_points,\
-                                           False,harms=harm_list[i],**kwargs)\
+                                           harms=harm_list[i],**kwargs)\
                                           for i,lamb in enumerate(tqdm(lambdas)))
     
     return np.array(limit)
 
 
 def get_abs_alpha_vs_lambda_background(agg_dict,pos_harms,neg_harms,file_inds=None,\
-                                       cl=0.95,num_points=5,**kwargs):
+                                       cl=0.95,num_points=20,**kwargs):
     '''
     Set the limit on the absolute value of alpha for the range of lambdas, where harmonics
     with positive alpha-hat are used for the positive alpha limit, harmonics with negative
@@ -771,61 +770,61 @@ def get_abs_alpha_vs_lambda_background(agg_dict,pos_harms,neg_harms,file_inds=No
     return np.amax(np.vstack(np.abs(limits)),axis=0)
 
 
-def q_vs_alpha(alpha_hat,uncond_nll,agg_dict,file_inds=None,lamb=1e-5,num_points=5,**kwargs):
-    '''
-    Plot the test statistic as a function of alpha.
-    '''
+# def q_vs_alpha(alpha_hat,uncond_nll,agg_dict,file_inds=None,lamb=1e-5,num_points=5,**kwargs):
+#     '''
+#     Plot the test statistic as a function of alpha.
+#     '''
 
-    alphas = np.sort(np.append(np.linspace(-alpha_hat,5*alpha_hat,num_points),alpha_hat))
-    q_vals = Parallel(n_jobs=len(alphas))(delayed(q_with_background)\
-                                        (alpha,uncond_nll,agg_dict,\
-                                        file_inds,lamb,**kwargs)\
-                                        for alpha in alphas)
+#     alphas = np.sort(np.append(np.linspace(-alpha_hat,5*alpha_hat,num_points),alpha_hat))
+#     q_vals = Parallel(n_jobs=len(alphas))(delayed(q_with_background)\
+#                                         (alpha,uncond_nll,agg_dict,\
+#                                         file_inds,lamb,**kwargs)\
+#                                         for alpha in alphas)
     
-    # the test statistic should have a minimum at (alpha_hat,0). If it dips negative it's due
-    # to errors in the fitting, so set it back to zero
-    q_vals = np.array(q_vals) - np.amin(q_vals)
+#     # the test statistic should have a minimum at (alpha_hat,0). If it dips negative it's due
+#     # to errors in the fitting, so set it back to zero
+#     q_vals = np.array(q_vals) - np.amin(q_vals)
     
-    return alphas,q_vals
+#     return alphas,q_vals
 
 
-def get_limit_from_q_parabola(agg_dict,file_inds=None,lamb=1e-5,cl=0.95,num_points=20,\
-                              return_q0=True,**kwargs):
-    '''
-    The minimization is noisy and is susceptible to fluctuations if parameters are not
-    chosen carefully. This function instead fits a parabola to the alpha curve and
-    determines the limit from the parabola.
-    '''
+# def get_limit_from_q_parabola(agg_dict,file_inds=None,lamb=1e-5,cl=0.95,num_points=20,\
+#                               return_q0=True,**kwargs):
+#     '''
+#     The minimization is noisy and is susceptible to fluctuations if parameters are not
+#     chosen carefully. This function instead fits a parabola to the alpha curve and
+#     determines the limit from the parabola.
+#     '''
 
-    print('Running unconditional NLL minimization for lambda={:.2e}...'.format(lamb))
+#     print('Running unconditional NLL minimization for lambda={:.2e}...'.format(lamb))
 
-    # threshold test statistic for a given confidence level, from Wilks' theorem
-    con_val = chi2(1).ppf(cl)*0.5
+#     # threshold test statistic for a given confidence level, from Wilks' theorem
+#     con_val = chi2(1).ppf(cl)*0.5
 
-    # compute the test statistic for a range of alphas
-    uncond_res = unconditional_mle(agg_dict,file_inds=file_inds,lamb=lamb,**kwargs)
-    alpha_hat = uncond_res.x[0]
-    uncond_nll = uncond_res.fun
-    alphas,q_vals = q_vs_alpha(alpha_hat,uncond_nll,agg_dict,file_inds,lamb,\
-                               num_points,**kwargs)
+#     # compute the test statistic for a range of alphas
+#     uncond_res = unconditional_mle(agg_dict,file_inds=file_inds,lamb=lamb,**kwargs)
+#     alpha_hat = uncond_res.values[0]
+#     uncond_nll = uncond_res.fval
+#     alphas,q_vals = q_vs_alpha(alpha_hat,uncond_nll,agg_dict,file_inds,lamb,\
+#                                num_points,**kwargs)
     
-    print('Got q-alpha curve for lambda={:.2e}...'.format(lamb))
+#     print('Got q-alpha curve for lambda={:.2e}...'.format(lamb))
 
-    # fit a parabola with a minimum at (alpha_hat,0) which has one free parameter
-    # q = a * (alpha - alpha_hat)^2
-    # analytic solution to the least-squares fitting
-    a_hat = np.sum(q_vals*(alphas-alpha_hat)**2)/np.sum((alphas-alpha_hat)**4)
+#     # fit a parabola with a minimum at (alpha_hat,0) which has one free parameter
+#     # q = a * (alpha - alpha_hat)^2
+#     # analytic solution to the least-squares fitting
+#     a_hat = np.sum(q_vals*(alphas-alpha_hat)**2)/np.sum((alphas-alpha_hat)**4)
 
-    # value at which the parabola crosses the CL threshold
-    alpha_lim = alpha_hat + np.sign(alpha_hat)*np.sqrt(con_val/a_hat)
+#     # value at which the parabola crosses the CL threshold
+#     alpha_lim = alpha_hat + np.sign(alpha_hat)*np.sqrt(con_val/a_hat)
 
-    # value of the test statistic at alpha=0
-    q_zero = a_hat*alpha_hat**2
+#     # value of the test statistic at alpha=0
+#     q_zero = a_hat*alpha_hat**2
 
-    if return_q0:
-        return alpha_lim,q_zero
-    else:
-        return alpha_lim
+#     if return_q0:
+#         return alpha_lim,q_zero
+#     else:
+#         return alpha_lim
 
  
 def split_harms_by_alpha_sign(agg_dict,num_cores=39,axes=['x','y']):
