@@ -96,7 +96,8 @@ class FileData:
     def load_data(self,tf_path=None,cal_drive_freq=71.0,max_freq=2500.,num_harmonics=10,\
                   harms=[],width=0,noise_bins=10,qpd_diag_mat=None,downsample=True,\
                   wiener=[False,True,False,False,False],cant_drive_freq=3.0,signal_model=None,\
-                  ml_model=None,p0_bead=None,mass_bead=0,lightweight=False,no_tf=False):
+                  ml_model=None,p0_bead=None,mass_bead=0,lightweight=False,no_tf=False,\
+                  force_cal_factors=[]):
         '''
         Applies calibrations to the cantilever data and QPD data, then gets FFTs for both.
         '''
@@ -121,7 +122,8 @@ class FileData:
         if downsample:
             self.filter_raw_data(wiener)
         self.calibrate_stage_position()
-        self.calibrate_bead_response(tf_path=tf_path,sensor='QPD',cal_drive_freq=cal_drive_freq,no_tf=no_tf)
+        self.calibrate_bead_response(tf_path=tf_path,sensor='QPD',cal_drive_freq=cal_drive_freq,no_tf=no_tf,\
+                                     force_cal_factors=force_cal_factors)
         self.calibrate_bead_response(tf_path=tf_path,sensor='PSPD',cal_drive_freq=cal_drive_freq,no_tf=no_tf)
         self.pspd_force_calibrated[2,:] = np.copy(self.qpd_force_calibrated[2,:])
         self.get_boolean_cant_mask(num_harmonics=num_harmonics,harms=harms,\
@@ -222,8 +224,8 @@ class FileData:
         quad_data = self.data_dict['quad_data']
         timestamp_ns = self.data_dict['timestamp_ns']
 
-        # within an hour should be good enough for now, but in future it could be calculated dynamically
-        diff_thresh = 3600.*1e9
+        # within a day should be good enough for now, but in future it could be calculated dynamically
+        diff_thresh = 3600.*1e9*24.*365.
 
         # first timestamp should be in first 12 elements
         for ind in range(12):
@@ -449,7 +451,7 @@ class FileData:
 
 
     def calibrate_bead_response(self,tf_path=None,sensor='QPD',cal_drive_freq=71.0,\
-                                no_tf=False):
+                                no_tf=False,force_cal_factors=[]):
         '''
         Apply correction using the transfer function to calibrate the
         x, y, and z responses.
@@ -468,7 +470,8 @@ class FileData:
 
         else:
             Harr = np.zeros((len(self.freqs), 3, 3))
-            force_cal_factors = np.ones(3)
+            if force_cal_factors==[]:
+                force_cal_factors = np.ones(3)
             for i in range(3):
                 for j in range(3):
                     if i==j:
@@ -628,7 +631,7 @@ class FileData:
         return Hout,force_cal_factors
     
 
-    def build_drive_mask(self, cant_fft, freqs, num_harmonics=10, width=0, harms=[], cant_drive_freq=3.0):
+    def build_drive_mask(self,cant_fft,freqs,num_harmonics=10,width=0,harms=[],cant_drive_freq=3.0):
         '''
         Identify the fundamental drive frequency and make an array of harmonics specified
         by the function arguments, then make a notch mask of the width specified around these harmonics.
@@ -673,7 +676,7 @@ class FileData:
         return drive_mask, fund_ind
 
 
-    def get_boolean_cant_mask(self, num_harmonics=10, harms=[], width=0, cant_harms=5, cant_drive_freq=3.0):
+    def get_boolean_cant_mask(self,num_harmonics=10,harms=[],width=0,cant_harms=5,cant_drive_freq=3.0):
         '''
         Build a boolean mask of a given width for the cantilever drive for the specified harnonics
         '''
@@ -710,7 +713,7 @@ class FileData:
         self.fund_ind = fund_ind # index of the fundamental frequency
 
 
-    def get_ffts_and_noise(self, noise_bins=10):   
+    def get_ffts_and_noise(self,noise_bins=10):   
         '''
         Get the fft of the x, y, and z data at each of the harmonics and
         some side-band frequencies.
@@ -982,7 +985,7 @@ class AggregateData:
 
     def load_file_data(self,num_cores=1,diagonalize_qpd=False,load_templates=False,harms=[],\
                        max_freq=500.,downsample=True,wiener=[False,True,False,False,False],\
-                       no_tf=False,no_config=False,ml_model=None,lightweight=True):
+                       no_tf=False,force_cal_factors=[],no_config=False,ml_model=None,lightweight=True):
         '''
         Create a FileData object for each of the files in the file list and load
         in the relevant data for physics analysis.
@@ -1000,12 +1003,14 @@ class AggregateData:
             self.diagonalize = True
         else:
             qpd_diag_mats = [None]*len(self.qpd_diag_mats)
+        if any(wiener):
+            self.noise_subtracted = True
         print('Loading data from {} files...'.format(len(self.file_list)))
         file_data_objs = Parallel(n_jobs=num_cores)(delayed(self.process_file)\
-                                                    (file_path,qpd_diag_mats[self.bin_indices[i,4]],signal_models[self.bin_indices[i,0]],\
-                                                     ml_model,self.p0_bead[self.bin_indices[i,2]],\
-                                                     self.mass_bead[self.bin_indices[i,1]],harms,\
-                                                     max_freq,downsample,wiener,no_tf,lightweight) \
+                                                    (file_path,qpd_diag_mats[self.bin_indices[i,4]],\
+                                                     signal_models[self.bin_indices[i,0]],ml_model,\
+                                                     self.p0_bead[self.bin_indices[i,2]],self.mass_bead[self.bin_indices[i,1]],\
+                                                     harms,max_freq,downsample,wiener,no_tf,force_cal_factors,lightweight) \
                                                      for i,file_path in enumerate(tqdm(self.file_list)))
         # record which files are bad and save the error logs
         error_logs = []
@@ -1062,7 +1067,7 @@ class AggregateData:
 
     def process_file(self,file_path,qpd_diag_mat=None,signal_model=None,ml_model=None,p0_bead=None,\
                      mass_bead=0,harms=[],max_freq=500.,downsample=True,wiener=[False,True,False,False,False],\
-                     no_tf=False,lightweight=True):
+                     no_tf=False,force_cal_factors=[],lightweight=True):
         '''
         Process data for an individual file and return the FileData object.
         '''
@@ -1070,7 +1075,7 @@ class AggregateData:
         try:
             this_file.load_data(qpd_diag_mat=qpd_diag_mat,signal_model=signal_model,ml_model=ml_model,\
                                 p0_bead=p0_bead,mass_bead=mass_bead,harms=harms,downsample=downsample,wiener=wiener,\
-                                max_freq=max_freq,no_tf=no_tf,lightweight=lightweight)
+                                max_freq=max_freq,no_tf=no_tf,force_cal_factors=force_cal_factors,lightweight=lightweight)
         except Exception as e:
             this_file.is_bad = True
             this_file.error_log = repr(e)
@@ -1106,6 +1111,7 @@ class AggregateData:
         p_trans_full = []
         cant_raw_data = []
         quad_raw_data = []
+        quad_null = []
         mean_cant_pos = []
         qpd_ffts = []
         qpd_ffts_full = []
@@ -1132,6 +1138,7 @@ class AggregateData:
             p_trans_full.append(f.p_trans_full)
             cant_raw_data.append(f.cant_raw_data)
             quad_raw_data.append(f.quad_raw_data)
+            quad_null.append(f.quad_null)
             mean_cant_pos.append(f.mean_cant_pos)
             qpd_ffts.append(f.qpd_ffts)
             qpd_ffts_full.append(f.qpd_ffts_full)
@@ -1169,6 +1176,7 @@ class AggregateData:
         p_trans_full = np.array(p_trans_full)
         cant_raw_data = np.array(cant_raw_data)
         quad_raw_data = np.array(quad_raw_data)
+        quad_null = np.array(quad_null)
         mean_cant_pos = np.array(mean_cant_pos)
         qpd_ffts = np.array(qpd_ffts)
         qpd_ffts_full = np.array(qpd_ffts_full)
@@ -1195,6 +1203,7 @@ class AggregateData:
         agg_dict['p_trans_full'] = p_trans_full
         agg_dict['cant_raw_data'] = cant_raw_data
         agg_dict['quad_raw_data'] = quad_raw_data
+        agg_dict['quad_null'] = quad_null
         agg_dict['mean_cant_pos'] = mean_cant_pos
         agg_dict['qpd_ffts'] = qpd_ffts
         agg_dict['qpd_ffts_full'] = qpd_ffts_full
@@ -1570,6 +1579,63 @@ class AggregateData:
         self.pspd_asds = np.array(pspd_asds)
 
         print('Amplitude spectral densities estimated for {} sets of run conditions.'.format(self.qpd_asds.shape[0]))
+
+
+    def subtract_coherent_noise(self):
+        '''
+        Subtract noise measured in the accelerometer from the QPD data streams, down to the
+        coherence limit. This should only be called if the "wiener" argument was set to False
+        for all channels when the data was loaded.
+        '''
+
+        print('Subtracting coherent portion of accelerometer noise from QPD data...')
+
+        if self.noise_subtracted:
+            print('Error: coherent noise already subtracted from the QPD data!')
+            return
+        
+        # get the accelerometer data and take the DFT
+        accels = self.agg_dict['accelerometer']
+        accels = (accels - np.mean(accels,axis=-1,keepdims=True))
+        win = sig.get_window(('tukey',0.05),accels.shape[-1])
+        accel_ffts = np.fft.rfft(win[np.newaxis,:]*accels,axis=-1)[:,:len(self.agg_dict['freqs'])]
+
+        # ffts already calibrated and scaled to the correct units
+        qpd_ffts = self.agg_dict['qpd_ffts_full']
+        qpd_data = np.fft.irfft(qpd_ffts,accels.shape[-1],axis=-1)[:,:2,:] #self.agg_dict['quad_raw_data']
+        qpd_null = np.fft.irfft(qpd_ffts,accels.shape[-1],axis=-1)[:,3,:] #self.agg_dict['quad_null']
+
+        # estimate the cross spectral density between the accelerometer and each QPD channel using all datasets
+        _,pxa = sig.csd(qpd_data[:,0,:].flatten(),accels.flatten(),fs=self.agg_dict['fsamp'],\
+                        window=win,nperseg=accels.shape[-1],noverlap=None)
+        _,pya = sig.csd(qpd_data[:,1,:].flatten(),accels.flatten(),fs=self.agg_dict['fsamp'],\
+                        window=win,nperseg=accels.shape[-1],noverlap=None)
+        _,pna = sig.csd(qpd_null.flatten(),accels.flatten(),fs=self.agg_dict['fsamp'],\
+                        window=win,nperseg=accels.shape[-1],noverlap=None)
+        
+        # estimate the accelerometer power spectral density using all datasets
+        _,paa = sig.welch(accels.flatten(),fs=self.agg_dict['fsamp'],window=win,nperseg=accels.shape[-1],noverlap=None)
+
+        # build the transfer functions
+        tf_x = pxa/paa
+        tf_y = pya/paa
+        tf_n = pna/paa
+
+        # subtract off the coherent noise from the ffts
+        qpd_ffts_x = qpd_ffts[:,0,:] - tf_x[np.newaxis,:len(self.agg_dict['freqs'])]*accel_ffts
+        qpd_ffts_y = qpd_ffts[:,1,:] - tf_y[np.newaxis,:len(self.agg_dict['freqs'])]*accel_ffts
+        qpd_ffts_n = qpd_ffts[:,3,:] - tf_n[np.newaxis,:len(self.agg_dict['freqs'])]*accel_ffts
+
+        # update the ffts in the dictionary
+        qpd_ffts[:,0,:] = qpd_ffts_x
+        qpd_ffts[:,1,:] = qpd_ffts_y
+        qpd_ffts[:,3,:] = qpd_ffts_n
+        self.agg_dict['qpds_ffts_full'] = qpd_ffts
+
+        # change the flag to indicate that coherent noise has been subtracted
+        self.noise_subtracted = True
+
+        print('Finished subtracting noise.')
     
 
     def drop_full_ffts(self):
@@ -1707,7 +1773,6 @@ class AggregateData:
 
         # for simplicity drop the imaginary parts. Power should be negligible, but check anyway
         print('Fraction of power in imaginary parts to be discarded:')
-        print(signal_mat)
         print('Q1: {:.3f}, Q2: {:.3f}, Q3: {:.3f}, Q4: {:.3f}'\
               .format(*(np.sum(np.imag(signal_mat)**2,axis=1)/np.sum(np.abs(signal_mat)**2,axis=1)).flatten()))
         signal_mat = np.real(signal_mat)
