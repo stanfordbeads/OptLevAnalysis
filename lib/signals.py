@@ -109,6 +109,24 @@ class GravFuncs(SignalModel):
         return force_array
     
 
+    def get_grav_at_pos(self, positions):
+        '''
+        Return the force at a given position. Argument 'positions' is an array of dimensions
+        Nx3 where N is the number of positions where the force should be calculated. Argument
+        'param_inds' is a list of length M where M is the number of free parameters in the
+        model. 
+        '''
+
+        # get the x,y, and z components of the force and return them
+        x_force = self.grav_funcs[0](positions)
+        y_force = self.grav_funcs[1](positions)
+        z_force = self.grav_funcs[2](positions)
+
+        force_array = np.array((x_force,y_force,z_force)).T
+
+        return force_array
+    
+
 class EDMFuncs(SignalModel):
     '''
     Child class of SignalModel for the electric dipole moment background model.
