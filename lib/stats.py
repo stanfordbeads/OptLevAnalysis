@@ -568,11 +568,6 @@ def nll_with_background(agg_dict,file_inds=None,lamb=1e-5,num_gammas=1,delta_mea
         nll_phis = (phis*np.ones_like(gammas) - np.mean(phis,axis=-1,keepdims=True))**2/(2*phi_sigma**2)
         nll_taus = (taus*np.ones_like(gammas) - 1.)**2/(2.*tau_sigma**2)
         nll_nuisance = nll_deltas + nll_phis + nll_taus
-
-        # print(np.sum(nll_signal),np.sum(nll_nuisance))
-        val = np.random.uniform(0,1)
-        if val<0.01:
-            print(np.sum(nll_signal),np.sum(nll_nuisance))
         
         return np.sum(nll_signal) + np.sum(nll_nuisance)
     
