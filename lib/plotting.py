@@ -213,8 +213,8 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None,plot_n
 
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     fig,ax = plt.subplots()
-    ax.semilogy(freqs,asd_x_raw,label='Naive $x$',color=colors[2],alpha=0.5)
-    ax.semilogy(freqs,asd_y_raw,label='Naive $y$',color=colors[3],alpha=0.5)
+    ax.semilogy(freqs,asd_x_raw,label='Naive $x$',color=colors[2],lw=1,alpha=0.5)
+    ax.semilogy(freqs,asd_y_raw,label='Naive $y$',color=colors[3],lw=1,alpha=0.5)
     if (p_x is not None) and (p_y is not None):
         ax.semilogy(freqs,lor(freqs,*p_x),label='Peak fit $x$',color=colors[2],alpha=0.8)
         ax.semilogy(freqs,lor(freqs,*p_y),label='Peak fit $y$',color=colors[3],alpha=0.8)
@@ -222,9 +222,11 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None,plot_n
     ax.semilogy(freqs,asd_y_corr,label='Diag. $y$',color=colors[1],lw=1,alpha=0.8)
     if plot_null:
         ax.semilogy(freqs,asd_n_raw,label='Naive null',color=colors[4],alpha=0.5)
-        ax.semilogy(freqs,asd_n_corr*1e2,label=r'100$\times$ diag. null',color=colors[5],alpha=0.8)
+        ax.semilogy(freqs,asd_n_corr*1e2/4,label=r'100$\times$ diag. null',color=colors[5],alpha=0.8)
     ax.set_xlim([280,420])
     ax.set_ylim([1e-1,1e2])
+    ax.set_xlim([0,50])
+    ax.set_ylim([1e-2,1e4])
     ax.set_xlabel('Frequency [Hz]')
     ax.set_ylabel('ASD [arb/$\sqrt{\mathrm{Hz}}$]')
     ax.set_title('QPD diagonalization')
@@ -659,7 +661,7 @@ def time_evolution(agg_dict,descrip=None,sensor='qpd',axis_ind=0,\
     asds = np.abs(agg_dict[sensor+'_ffts'][:,axis_ind,:])*fft_to_asd
     phases = np.angle(agg_dict[sensor+'_ffts'][:,axis_ind,:])*180./np.pi
 
-    # average by time
+    # take the average in each time interval
     delta_t = (av_times[1]-av_times[0])*1e-9
     t_bins = int(round(t_bin_width/delta_t))
     num_t_bins = int(len(av_times)/t_bins)
@@ -727,7 +729,7 @@ def position_drift(agg_dict,descrip=None,t_bin_width=None):
     start_date = datetime.fromtimestamp(av_times[0]*1e-9).strftime('%b %d, %H:%M:%S')
     hours = (av_times-av_times[0])*1e-9/3600.
 
-    # average by time
+    # take the average in each time interval
     delta_t = (av_times[1]-av_times[0])*1e-9
     t_bins = int(round(t_bin_width/delta_t))
     num_t_bins = int(len(av_times)/t_bins)
@@ -799,7 +801,7 @@ def mles_vs_time(agg_dict,descrip=None,sensor='qpd',axis_ind=0,t_bin_width=None)
     # get the best fit alphas
     likelihood_coeffs = fit_alpha_all_files(agg_dict,sensor=sensor)
 
-    # average by time
+    # take the average in each time interval
     delta_t = (av_times[1]-av_times[0])*1e-9
     t_bins = int(round(t_bin_width/delta_t))
     num_t_bins = int(len(av_times)/t_bins)
@@ -980,7 +982,7 @@ def limit_vs_integration(agg_dict,descrip=None,sensor='qpd'):
 
 
 def mle_fingerprint(agg_dict,mle_result,file_inds=None,lamb=1e-5,single_beta=False,num_gammas=1,\
-                    delta_means=[0.1,0.1],axes=['x','y'],harms=[],channel='motion',log=True):
+                    delta_means=[0.1,0.1],axes=['x','y'],harms=[],channel='motion',log=True,errors=False):
     '''
     Plot the measured and fitted spectral fingerprints, showing the contribution of
     background and signal to the total measurement.
@@ -1020,9 +1022,8 @@ def mle_fingerprint(agg_dict,mle_result,file_inds=None,lamb=1e-5,single_beta=Fal
     background_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,3,:]
     background_var = (1./(2.*num_sb))*np.sum(np.real(background_sb_ffts)**2+np.imag(background_sb_ffts)**2,axis=-1)
 
-    alpha,beta,gammas,deltas = reshape_nll_args(x=mle_result,data_shape=qpd_ffts[...,harm_inds].shape,\
-                                                alpha=None,single_beta=single_beta,num_gammas=num_gammas,\
-                                                delta_means=delta_means,axes=axes)
+    alpha,gammas,deltas,taus = reshape_nll_args(x=mle_result,data_shape=qpd_ffts[...,harm_inds].shape,\
+                                                num_gammas=num_gammas,delta_means=delta_means,axes=axes,harms=harms)
     
     # plot the real and imaginary parts separately unless doing a log plot of magnitudes
     if log:
@@ -1032,30 +1033,35 @@ def mle_fingerprint(agg_dict,mle_result,file_inds=None,lamb=1e-5,single_beta=Fal
     
     # swap mean and absolute value to get the measurement and fits to match
     if channel=='motion':
-        noise = np.sqrt(data_var[...,harm_inds])
+        noise = np.sqrt(data_var[...,harm_inds] + background_var[:,np.newaxis,harm_inds])
         measurements = qpd_ffts[:,first_axis:second_axis,harm_inds]
-        signal_fits = alpha*yuk_ffts[:,first_axis:second_axis,harm_inds]
-        background_fits = beta*gammas*qpd_ffts[:,np.newaxis,3,harm_inds]
+        signal_fits = alpha*taus*yuk_ffts[:,first_axis:second_axis,harm_inds]
+        background_fits = gammas*(qpd_ffts[:,np.newaxis,3,harm_inds] \
+                                  - alpha*np.sum(deltas*taus*yuk_ffts[:,first_axis:second_axis,harm_inds],axis=1)[:,np.newaxis,:])
     elif channel=='null':
         noise = np.sqrt(background_var[:,np.newaxis,harm_inds])
         measurements = qpd_ffts[:,np.newaxis,3,harm_inds]
-        signal_fits = alpha*np.sum(deltas*yuk_ffts[:,first_axis:second_axis,harm_inds],axis=1)[:,np.newaxis]
-        background_fits = beta*qpd_ffts[:,np.newaxis,3,harm_inds]
+        signal_fits = alpha*np.sum(deltas*taus*yuk_ffts[:,first_axis:second_axis,harm_inds],axis=1)[:,np.newaxis,:]
+        background_fits = measurements - signal_fits
         axes = ['null']
     
-    fig,axs = plt.subplots(len(axes),2-int(log),figsize=(6,2*len(axes)+2),sharex=True,sharey='row',squeeze=False)
-    # colors = style.library['fivethirtyeight']['axes.prop_cycle'].by_key()['color']
-    colors = [plt.get_cmap('turbo',7)(i) for i in range(1,6)]
+    fig,axs = plt.subplots(len(axes),2-int(log),figsize=(6,2*len(axes)+2),sharex=True,sharey=True,squeeze=False)
+    colors = [plt.get_cmap('magma',7)(i) for i in range(1,6)]
     titles = ['Real','Imaginary']
 
     for i in range(np.shape(axs)[0]):
         for j,func in enumerate(funcs):
-            axs[i,j].bar(harm_labels,np.mean(noise,axis=0)[i],width=0.75,color=colors[3],label='Noise',zorder=11)
-            axs[i,j].bar(harm_labels,np.mean(-noise,axis=0)[i],width=0.75,color=colors[3],zorder=10)
-            axs[i,j].bar(harm_labels,np.mean(func(measurements),axis=0)[i],width=0.5,color=colors[1],label='Measurement',zorder=12)
-            axs[i,j].bar(harm_labels,np.mean(func(signal_fits),axis=0)[i],width=0.25,color=colors[2],label='Yukawa fit',zorder=14)
-            axs[i,j].bar(harm_labels,np.mean(func(background_fits),axis=0)[i]+np.mean(func(signal_fits),axis=0)[i],\
-                         width=0.25,color=colors[0],label='Background fit',zorder=13)
+            axs[i,j].bar(harm_labels,np.mean(noise,axis=0)[i],width=0.8,color=colors[3],label='Noise',zorder=11)
+            axs[i,j].bar(harm_labels,np.mean(-noise,axis=0)[i],width=0.8,color=colors[3],zorder=10)
+            axs[i,j].bar(harm_labels,func(np.mean(measurements,axis=0))[i],width=0.6,color=colors[1],label='Measurement',zorder=12)
+            if errors:
+                axs[i,j].errorbar(harm_labels,func(np.mean(measurements,axis=0))[i],yerr=np.std(func(measurements),axis=0)[i],\
+                                  ls='none',marker='o',ms=4,lw=2,color=colors[2],label='$\pm1\sigma$',zorder=16)
+            sig_bar = func(np.mean(signal_fits,axis=0))[i]
+            bkg_bar = func(np.mean(background_fits,axis=0))[i]
+            offsets = sig_bar*np.amax(np.vstack((np.sign(sig_bar)*np.sign(bkg_bar),np.zeros_like(bkg_bar))),axis=0)
+            axs[i,j].bar(harm_labels,sig_bar,width=0.3,color=colors[4],label='Yukawa fit',zorder=15)
+            axs[i,j].bar(harm_labels,bkg_bar+offsets,width=0.3,color=colors[0],label='Background fit',zorder=14)
             if j==0:
                 if axes[i]=='null':
                     axs[i,j].set_ylabel('Force in null [arb]'.format(axes[i]))
@@ -1070,13 +1076,13 @@ def mle_fingerprint(agg_dict,mle_result,file_inds=None,lamb=1e-5,single_beta=Fal
             axs[i,j].grid(which='both',zorder=0)
 
     handles, labels = axs[-1,-1].get_legend_handles_labels()
-    fig.legend(handles,labels,loc='upper center',ncol=4,bbox_to_anchor=(0.55,0.96))
+    fig.legend(handles,labels,loc='upper center',ncol=5,bbox_to_anchor=(0.55,0.96),columnspacing=0.8,handlelength=1.5)
     fig.suptitle('Best fit to spectral fingerprint in the {} channel'.format(channel),y=1.02)
 
     return fig,axs
 
 
-def q_alpha_fit(alphas,q_vals,alpha_hat,range=[-1,5]):
+def q_alpha_fit(alphas,q_vals,alpha_hat,range=[-1,2],sigma_sys=None):
     '''
     Plot the fit to the test statistic vs alpha, from which the 95% CL limit is obtained.
     '''
@@ -1087,18 +1093,24 @@ def q_alpha_fit(alphas,q_vals,alpha_hat,range=[-1,5]):
     # parameter for the best fit parabola that has the minimum in the correct spot
     a_hat = np.sum(q_vals*(alphas-alpha_hat)**2)/np.sum((alphas-alpha_hat)**4)
 
+    if sigma_sys is not None:
+        a_new = a_hat*(1 - sigma_sys**2/(a_hat**-1 + sigma_sys**2))
+
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     fig,ax = plt.subplots(2,1,figsize=(6,6),sharex=True,gridspec_kw = {'wspace':0,'hspace':0})
     ax[0].semilogy(alphas[q_vals>10],q_vals[q_vals>10],ls='none',marker='o',ms=4,markeredgewidth=1.5,\
                    fillstyle='none',label='Computed',zorder=10)
     ax[0].semilogy(alpha_vals,a_hat*(alpha_vals-alpha_hat)**2,label='Fit')
+    if sigma_sys is not None:
+        ax[0].semilogy(alpha_vals,a_new*(alpha_vals-alpha_hat)**2,color=colors[3],label='Sys. error added')
+        ax[1].plot(alpha_vals,a_new*(alpha_vals-alpha_hat)**2,color=colors[3])
     ax[0].axhline(0,color=colors[2],ls='--',label='95\% CL threshold')
     ax[1].plot(alphas,q_vals,ls='none',marker='o',ms=4,markeredgewidth=1.5,fillstyle='none',zorder=11)
     ax[1].plot(alpha_vals,a_hat*(alpha_vals-alpha_hat)**2)
     ax[1].axhline(chi2(1).ppf(0.95)*0.5,color=colors[2],ls='--')
     y_max = ax[0].get_ylim()[1]
     ax[0].set_ylim([10,y_max])
-    ax[0].set_yticks(np.logspace(2,np.floor(np.log10(y_max)),int(np.floor(np.log10(y_max))-1)))
+    ax[0].set_yticks(np.logspace(2,np.floor(np.log10(y_max)),max(int(np.floor(np.log10(y_max))-1),1)))
     ax[1].set_ylim([0,10])
     ax[1].set_xlabel(r'$\alpha$')
     ax[0].set_ylabel(r'$q_{\alpha}$ (log scale)')
@@ -1106,6 +1118,224 @@ def q_alpha_fit(alphas,q_vals,alpha_hat,range=[-1,5]):
     ax[0].set_title('Quadratic fit to test statistic')
     ax[0].grid(which='both')
     ax[1].grid(which='both')
-    ax[0].legend(ncol=3)
+    ax[0].legend(ncol=3-(sigma_sys is not None))
 
+    return fig,ax
+
+
+def mles_vs_time_background(agg_dict,file_inds=None,lamb=1e-5,single_beta=False,num_gammas=1,\
+                            delta_means=[0.1,0.1],phi_sigma=10.,axes=['x','y'],harms=[],spline=False,\
+                            alpha_guess=1e9,descrip=None,t_bin_width=None):
+    '''
+    Plot the MLE parameters over time.
+    '''
+
+    if descrip is None:
+        descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
+
+    if t_bin_width is None:
+        t_bin_width = max(60,int((agg_dict['timestamp'][-1]-agg_dict['timestamp'][0])/20))
+
+    if file_inds is None:
+        file_inds = np.array(range(agg_dict['times'].shape[0]))
+    
+    times = agg_dict['times'][file_inds]
+    av_times = np.mean(times,axis=1)
+    start_date = datetime.fromtimestamp(av_times[0]*1e-9).strftime('%b %d, %H:%M:%S')
+    hours = (av_times-av_times[0])*1e-9/3600.
+    harm_freqs = agg_dict['freqs'][agg_dict['good_inds']]
+
+    # index where lambda is 10 um
+    lamb_ind = np.argmin(np.abs(agg_dict['template_params'][0,:]-1e-5))
+
+    # choose which harmonics to include
+    if harms==[]:
+        harm_inds = np.array(range(len(agg_dict['good_inds'])))
+    else:
+        harms_full = agg_dict['freqs'][agg_dict['good_inds']]
+        harm_inds = [np.argmin(np.abs(3*h - harms_full)) for h in harms]
+
+    # take the average in each time interval
+    delta_t = (av_times[1]-av_times[0])*1e-9
+    t_bins = int(round(t_bin_width/delta_t))
+    num_t_bins = int(len(av_times)/t_bins)
+    alpha_hat_t = np.zeros(num_t_bins)
+    err_alpha_t = np.zeros(num_t_bins)
+    gamma_hat_t = np.zeros((num_t_bins,2,len(harm_inds)))
+    delta_hat_t = np.zeros((num_t_bins,2))
+    plot_times = np.zeros(num_t_bins)
+
+    # minimize the NLL for each time bin
+    for i in range(num_t_bins):
+        mle_result = minimize_nll(agg_dict,file_inds=file_inds,delta_means=delta_means,phi_sigma=phi_sigma,lamb=lamb,\
+                                  num_gammas=num_gammas,axes=axes,spline=spline,harms=harms,alpha_guess=alpha_guess)
+        alpha,gammas,deltas,taus = reshape_nll_args(x=np.array(mle_result.values),data_shape=agg_dict['qpd_ffts'][...,harm_inds].shape,\
+                                                    num_gammas=num_gammas,delta_means=delta_means,axes=axes,harms=harms)
+        alpha_hat_t[i] = alpha
+        err_alpha_t[i] = mle_result.errors['alpha']
+        gamma_hat_t[i,0,:] = gammas[0,0,:]
+        gamma_hat_t[i,1,:] = gammas[0,1,:]
+        delta_hat_t[i,:] = deltas[0,:,0]
+        plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
+
+    colors = [plt.get_cmap('rainbow',len(harm_inds))(i) for i in range(len(harm_inds))]
+    fig,ax = plt.subplots(2,2,figsize=(12,10),sharex=True)
+    ax[0,0].errorbar(plot_times,alpha_hat_t/1e8,yerr=2.*err_alpha_t/1e8,color=colors[0],ls='none',\
+                     ms=6,marker='o',label=r'$\hat{\alpha}\pm2\sigma$')
+    ax[0,1].plot(plot_times,delta_hat_t[:,0],ls='-',marker='o',ms=6,color=colors[1],label=r'$x$')
+    ax[0,1].plot(plot_times,delta_hat_t[:,1],ls='-',marker='o',ms=6,color=colors[2],label=r'$y$')
+    for i in range(len(harm_inds)):
+        ax[1,0].plot(plot_times,gamma_hat_t[:,0,i],ls='-',marker='o',ms=6,\
+                 color=colors[i],label='{:.0f} Hz'.format(harm_freqs[harm_inds[i]]))
+        ax[1,1].plot(plot_times,gamma_hat_t[:,1,i],ls='-',marker='o',ms=6,\
+                 color=colors[i],label='{:.0f} Hz'.format(harm_freqs[harm_inds[i]]))
+    for i in range(2):
+        for j in range(2):
+            ax[i,j].grid(which='both')
+            ax[i,j].legend(ncol=4)
+    x_ylim = ax[1,0].get_ylim()
+    y_ylim = ax[1,1].get_ylim()
+    ax[1,0].set_ylim([min(x_ylim[0],y_ylim[0]),max(x_ylim[1],y_ylim[1])])
+    ax[1,1].set_ylim([min(x_ylim[0],y_ylim[0]),max(x_ylim[1],y_ylim[1])])
+    ax[0,0].set_ylabel(r'$\hat{\alpha} / 10^8$')
+    ax[0,1].set_ylabel(r'$\hat{\delta}$')
+    ax[1,0].set_ylabel(r'$\hat{\gamma}_x$')
+    ax[1,1].set_ylabel(r'$\hat{\gamma}_y$')
+    ax[1,0].set_xlabel('Time since '+start_date+' [hours]')
+    ax[1,1].set_xlabel('Time since '+start_date+' [hours]')
+    ax[1,0].set_xlim([min(plot_times),max(plot_times)])
+    ax[1,1].set_xlim([min(plot_times),max(plot_times)])
+    ax[0,0].set_title(r'Yukawa strength, $\alpha$')
+    ax[0,1].set_title('Coupling of signal into null channel')
+    ax[1,0].set_title('Coupling of background into $x$ channel')
+    ax[1,1].set_title('Coupling of background into $y$ channel')
+
+    fig.suptitle('Time evolution of MLE parameters for '+descrip,fontsize=24)
+
+    del times, av_times, start_date, hours, harm_freqs, lamb_ind, mle_result,\
+        delta_t, t_bins, num_t_bins, alpha_hat_t, err_alpha_t, plot_times, colors,\
+        alpha, gammas, deltas, taus, harm_inds, descrip, t_bin_width
+    
+    return fig,ax
+
+
+def response_vs_time(agg_dict,file_inds=None,harms=[],descrip=None,t_bin_width=None,bands=False):
+    '''
+    Plot the response in the motion and null channels over time.
+    '''
+
+    if descrip is None:
+        descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
+
+    if t_bin_width is None:
+        t_bin_width = max(60,int((agg_dict['timestamp'][-1]-agg_dict['timestamp'][0])/20))
+
+    if file_inds is None:
+        file_inds = np.array(range(agg_dict['times'].shape[0]))
+
+    if harms==[]:
+        harm_inds = np.array(range(len(agg_dict['good_inds'])))
+    else:
+        harms_full = agg_dict['freqs'][agg_dict['good_inds']]
+        harm_inds = [np.argmin(np.abs(3*h - harms_full)) for h in harms]
+
+    # get the data to be plotted
+    qpd_ffts = agg_dict['qpd_ffts'][file_inds,:,:]
+    qpd_sb_ffts = agg_dict['qpd_sb_ffts'][file_inds,:,:]
+    num_sb = int(qpd_sb_ffts.shape[2]/qpd_ffts.shape[2])
+    data_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,:2,...]
+    data_var = (1./(2.*num_sb))*np.sum(np.real(data_sb_ffts)**2+np.imag(data_sb_ffts)**2,axis=-1)
+    background_sb_ffts = qpd_sb_ffts.reshape(qpd_sb_ffts.shape[0],qpd_sb_ffts.shape[1],-1,num_sb)[:,3,:]
+    background_var = (1./(2.*num_sb))*np.sum(np.real(background_sb_ffts)**2+np.imag(background_sb_ffts)**2,axis=-1)
+
+    # take the average in each time interval
+    times = agg_dict['times'][file_inds]
+    av_times = np.mean(times,axis=1)
+    start_date = datetime.fromtimestamp(av_times[0]*1e-9).strftime('%b %d, %H:%M:%S')
+    hours = (av_times-av_times[0])*1e-9/3600.
+    harm_freqs = agg_dict['freqs'][agg_dict['good_inds']]
+    delta_t = (av_times[1]-av_times[0])*1e-9
+    t_bins = int(round(t_bin_width/delta_t))
+    num_t_bins = int(len(av_times)/t_bins)
+    plot_times = np.zeros(num_t_bins)
+    resp_x_real = np.zeros((num_t_bins,len(harm_freqs)))
+    resp_y_real = np.zeros((num_t_bins,len(harm_freqs)))
+    resp_n_real = np.zeros((num_t_bins,len(harm_freqs)))
+    resp_x_imag = np.zeros((num_t_bins,len(harm_freqs)))
+    resp_y_imag = np.zeros((num_t_bins,len(harm_freqs)))
+    resp_n_imag = np.zeros((num_t_bins,len(harm_freqs)))
+    errs_x = np.zeros((num_t_bins,len(harm_freqs)))
+    errs_y = np.zeros((num_t_bins,len(harm_freqs)))
+    errs_n = np.zeros((num_t_bins,len(harm_freqs)))
+
+    for i in range(num_t_bins):
+        resp_x_real[i,:] = np.mean(np.real(qpd_ffts[i*t_bins:(i+1)*t_bins,0,:]),axis=0)
+        resp_y_real[i,:] = np.mean(np.real(qpd_ffts[i*t_bins:(i+1)*t_bins,1,:]),axis=0)
+        resp_n_real[i,:] = np.mean(np.real(qpd_ffts[i*t_bins:(i+1)*t_bins,3,:]),axis=0)
+        resp_x_imag[i,:] = np.mean(np.imag(qpd_ffts[i*t_bins:(i+1)*t_bins,0,:]),axis=0)
+        resp_y_imag[i,:] = np.mean(np.imag(qpd_ffts[i*t_bins:(i+1)*t_bins,1,:]),axis=0)
+        resp_n_imag[i,:] = np.mean(np.imag(qpd_ffts[i*t_bins:(i+1)*t_bins,3,:]),axis=0)
+        errs_x[i,:] = np.sqrt(np.mean(data_var[i*t_bins:(i+1)*t_bins,0,:],axis=0))
+        errs_y[i,:] = np.sqrt(np.mean(data_var[i*t_bins:(i+1)*t_bins,1,:],axis=0))
+        errs_n[i,:] = np.sqrt(np.mean(background_var[i*t_bins:(i+1)*t_bins,:],axis=0))
+        plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
+
+    if bands:
+        # plot the plus/minus one sigma bands
+        x_real_lower = np.mean(resp_x_real,axis=0) - np.std(resp_x_real,axis=0)
+        x_real_upper = np.mean(resp_x_real,axis=0) + np.std(resp_x_real,axis=0)
+        y_real_lower = np.mean(resp_y_real,axis=0) - np.std(resp_y_real,axis=0)
+        y_real_upper = np.mean(resp_y_real,axis=0) + np.std(resp_y_real,axis=0)
+        n_real_lower = np.mean(resp_n_real,axis=0) - np.std(resp_n_real,axis=0)
+        n_real_upper = np.mean(resp_n_real,axis=0) + np.std(resp_n_real,axis=0)
+        x_imag_lower = np.mean(resp_x_imag,axis=0) - np.std(resp_x_imag,axis=0)
+        x_imag_upper = np.mean(resp_x_imag,axis=0) + np.std(resp_x_imag,axis=0)
+        y_imag_lower = np.mean(resp_y_imag,axis=0) - np.std(resp_y_imag,axis=0)
+        y_imag_upper = np.mean(resp_y_imag,axis=0) + np.std(resp_y_imag,axis=0)
+        n_imag_lower = np.mean(resp_n_imag,axis=0) - np.std(resp_n_imag,axis=0)
+        n_imag_upper = np.mean(resp_n_imag,axis=0) + np.std(resp_n_imag,axis=0)
+
+    fig,ax = plt.subplots(3,2,figsize=(12,16),sharex=True,sharey=True)
+    colors = [plt.get_cmap('twilight',len(harm_inds)+1)(i) for i in range(len(harm_inds))]
+    axes = ['$x$','$y$','null']
+    for i in range(len(harm_inds)):
+        ax[0,0].errorbar(plot_times,resp_x_real[:,i],yerr=errs_x[:,i],ms=6,marker='o',color=colors[i],\
+                         label='{:.0f} Hz'.format(harm_freqs[harm_inds[i]]))
+        ax[0,1].errorbar(plot_times,resp_x_imag[:,i],yerr=errs_x[:,i],ms=6,marker='o',color=colors[i],\
+                         label='{:.0f} Hz'.format(harm_freqs[harm_inds[i]]))
+        ax[1,0].errorbar(plot_times,resp_y_real[:,i],yerr=errs_y[:,i],ms=6,marker='o',color=colors[i],\
+                         label='{:.0f} Hz'.format(harm_freqs[harm_inds[i]]))
+        ax[1,1].errorbar(plot_times,resp_y_imag[:,i],yerr=errs_y[:,i],ms=6,marker='o',color=colors[i],\
+                         label='{:.0f} Hz'.format(harm_freqs[harm_inds[i]]))
+        ax[2,0].errorbar(plot_times,resp_n_real[:,i],yerr=errs_n[:,i],ms=6,marker='o',color=colors[i],\
+                         label='{:.0f} Hz'.format(harm_freqs[harm_inds[i]]))
+        ax[2,1].errorbar(plot_times,resp_n_imag[:,i],yerr=errs_n[:,i],ms=6,marker='o',color=colors[i],\
+                         label='{:.0f} Hz'.format(harm_freqs[harm_inds[i]]))
+        
+        if bands:
+            ax[0,0].fill_between(plot_times,x_real_lower[i],x_real_upper[i],facecolor=colors[i],edgecolor='none',alpha=0.3)
+            ax[0,1].fill_between(plot_times,x_imag_lower[i],x_imag_upper[i],facecolor=colors[i],edgecolor='none',alpha=0.3)
+            ax[1,0].fill_between(plot_times,y_real_lower[i],y_real_upper[i],facecolor=colors[i],edgecolor='none',alpha=0.3)
+            ax[1,1].fill_between(plot_times,y_imag_lower[i],y_imag_upper[i],facecolor=colors[i],edgecolor='none',alpha=0.3)
+            ax[2,0].fill_between(plot_times,n_real_lower[i],n_real_upper[i],facecolor=colors[i],edgecolor='none',alpha=0.3)
+            ax[2,1].fill_between(plot_times,n_imag_lower[i],n_imag_upper[i],facecolor=colors[i],edgecolor='none',alpha=0.3)
+
+    for i in range(3):
+        ax[i,0].set_ylabel('Force in {} [N]'.format(axes[i]))
+        for j in range(2):
+            ax[i,j].grid(which='both')
+            ax[i,j].legend(ncol=4)
+    ax[0,0].set_title('Real')
+    ax[0,1].set_title('Imaginary')
+    ax[2,0].set_xlabel('Time since '+start_date+' [hours]')
+    ax[2,1].set_xlabel('Time since '+start_date+' [hours]')
+    ax[1,0].set_xlim([min(plot_times),max(plot_times)])
+    ax[1,1].set_xlim([min(plot_times),max(plot_times)])
+
+    fig.suptitle('Time evolution of response in the motion and null channels for '+descrip,fontsize=24)
+
+    del times, av_times, start_date, hours, harm_freqs, delta_t, t_bins, num_t_bins,\
+        plot_times, resp_x_real, resp_y_real, resp_n_real, resp_x_imag, resp_y_imag, resp_n_imag,\
+        descrip, t_bin_width
+    
     return fig,ax
