@@ -142,19 +142,25 @@ class FileData:
         Reads raw data and metadata from an hdf5 file directly into a dict.
         '''
         dd = {}
-        with h5py.File(self.file_name, 'r') as f:
+        with h5py.File(self.file_name,'r') as f:
             dd['cant_data'] = np.array(f['cant_data'],dtype=np.float64)
             dd['quad_data'] = np.array(f['quad_data'],dtype=np.float64)
             try:
                 dd['accelerometer'] = np.array(f['seismometer'])
-                dd['laser_power'] = np.array(f['laser_power'])
-                dd['p_trans'] = np.array(f['p_trans'])
-                dd['pspd_data'] = np.array(f['PSPD'])
-            except:
+            except KeyError:
                 dd['accelerometer'] = np.zeros_like(dd['cant_data'][0])
+            try:
+                dd['laser_power'] = np.array(f['laser_power'])
+            except KeyError:
                 dd['laser_power'] = np.zeros_like(dd['cant_data'][0])
-                dd['pspd_data'] = np.zeros_like(dd['cant_data'])
+            try:
+                dd['p_trans'] = np.array(f['p_trans'])
+            except KeyError:
                 dd['p_trans'] = np.zeros_like(dd['cant_data'][0])
+            try:
+                dd['pspd_data'] = np.array(f['PSPD'])
+            except KeyError:
+                dd['pspd_data'] = np.zeros_like(dd['cant_data'])
             dd['timestamp_ns'] = os.stat(self.file_name).st_mtime*1e9
             dd['fsamp'] = f.attrs['Fsamp']/f.attrs['downsamp']
             try:
@@ -1596,6 +1602,9 @@ class AggregateData:
         
         # get the accelerometer data and take the DFT
         accels = self.agg_dict['accelerometer']
+        if np.all(accels==0):
+            print('Error: no accelerometer data found!')
+            return
         accels = (accels - np.mean(accels,axis=-1,keepdims=True))
         win = sig.get_window(('tukey',0.05),accels.shape[-1])
         accel_ffts = np.fft.rfft(win[np.newaxis,:]*accels,axis=-1)[:,:len(self.agg_dict['freqs'])]
