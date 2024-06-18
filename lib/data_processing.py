@@ -146,9 +146,18 @@ class FileData:
             dd['cant_data'] = np.array(f['cant_data'],dtype=np.float64)
             dd['quad_data'] = np.array(f['quad_data'],dtype=np.float64)
             try:
-                dd['accelerometer'] = np.array(f['seismometer'])
+                try:
+                    accel = np.array(f['acc'])
+                except KeyError:
+                    accel = np.array(f['seismometer'])
+                if len(accel.shape) < 2:
+                    dd['accelerometer'] = np.array([np.zeros_like(accel),\
+                                                    np.zeros_like(accel),\
+                                                    accel])
+                else:
+                    dd['accelerometer'] = accel
             except KeyError:
-                dd['accelerometer'] = np.zeros_like(dd['cant_data'][0])
+                dd['accelerometer'] = np.zeros_like(dd['cant_data'])
             try:
                 dd['laser_power'] = np.array(f['laser_power'])
             except KeyError:
@@ -342,19 +351,49 @@ class FileData:
 
         # load the pre-trained filters for this data
         with h5py.File('/data/new_trap_processed/calibrations/data_processing_filters/' +\
-                       self.date + '/wienerFilters.h5','r') as filter_file:
+                        self.date + '/wienerFilters.h5','r') as filter_file:
+            
+            # low pass filter for downsampling
             LPF = filter_file['LPF'][:]
-            W_x_qpd = filter_file['QPD/W_x'][:]
-            W_y_qpd = filter_file['QPD/W_y'][:]
-            W_z_qpd = filter_file['QPD/W_z'][:]
-            W_x_pspd = filter_file['PSPD/W_x'][:]
-            W_y_pspd = filter_file['PSPD/W_y'][:]
+
+            # sensor naming conventions have changed, so accept multiple names
+            sensor_name = [s for s in list(filter_file.keys()) if s not in ['QPD', 'LPF']][0]
+
+            # start by ensuring the filters are longer than necessary
+            W_qpd = np.zeros((3,3,len(self.freqs)))
+            W_pspd = np.zeros((2,3,len(self.freqs)))
+
+            axes = ['x','y','z']
+            for accel_ind in range(len(axes)):
+                for sens_ind in range(len(axes)):
+                    # if the filter doesn't exist, use an array of zeros
+                    try:
+                        this_filter = np.array(filter_file['QPD/accel_' + axes[accel_ind] + '/W_' + axes[sens_ind]][0,:])
+                        W_qpd[sens_ind,accel_ind,:len(this_filter)] = this_filter
+                    except KeyError:
+                        pass
+                    if axes[sens_ind]!='z':
+                        try:
+                            this_filter = np.array(filter_file[sensor_name + '/accel_' + axes[accel_ind] + '/W_' + axes[sens_ind]][0,:])
+                            W_pspd[sens_ind,accel_ind,:len(this_filter)] = this_filter
+                        except KeyError:
+                            pass
+
+            # truncate the filters to the minimum length
+            min_lens = []
+            if ~np.all(W_qpd==0):
+                min_lens.append(np.argwhere(W_qpd>0).max())
+            if ~np.all(W_pspd==0):
+                min_lens.append(np.argwhere(W_pspd>0).max())
+            if len(min_lens):
+                W_qpd = W_qpd[:,:,:np.amin(min_lens)+1]
+                W_pspd = W_pspd[:,:,:np.amin(min_lens)+1]
 
         # get arrays of the raw time series
         qpd_x,qpd_y,qpd_z = tuple(self.quad_raw_data)
         qpd_n = self.quad_null
         pspd_x,pspd_y,_ = tuple(self.pspd_raw_data)
-        accel = self.accelerometer
+        accel_x,accel_y,accel_z = tuple(self.accelerometer)
         cant_x,cant_y,cant_z = tuple(self.cant_raw_data)
 
         # detrend the data
@@ -364,7 +403,9 @@ class FileData:
         qpd_n -= np.mean(qpd_n)
         pspd_x -= np.mean(pspd_x)
         pspd_y -= np.mean(pspd_y)
-        accel -= np.mean(accel)
+        accel_x -= np.mean(accel_x)
+        accel_y -= np.mean(accel_y)
+        accel_z -= np.mean(accel_z)
         mean_cant_x = np.mean(cant_x)
         mean_cant_y = np.mean(cant_y)
         mean_cant_z = np.mean(cant_z)
@@ -379,25 +420,33 @@ class FileData:
         qpd_n_lpf = sig.decimate(qpd_n, ds_factor, ftype=dlti_filter, zero_phase=True)
         pspd_x_lpf = sig.decimate(pspd_x,ds_factor,ftype=dlti_filter, zero_phase=True)
         pspd_y_lpf = sig.decimate(pspd_y,ds_factor,ftype=dlti_filter, zero_phase=True)
-        accel_lpf = sig.decimate(accel, ds_factor, ftype=dlti_filter, zero_phase=True)
+        accel_x_lpf = sig.decimate(accel_x,ds_factor,ftype=dlti_filter, zero_phase=True)
+        accel_y_lpf = sig.decimate(accel_y,ds_factor,ftype=dlti_filter, zero_phase=True)
+        accel_z_lpf = sig.decimate(accel_z,ds_factor,ftype=dlti_filter, zero_phase=True)
         cant_x_lpf = sig.decimate(cant_x-mean_cant_x, ds_factor,ftype=dlti_filter,zero_phase=True) + mean_cant_x
         cant_y_lpf = sig.decimate(cant_y-mean_cant_y, ds_factor,ftype=dlti_filter,zero_phase=True) + mean_cant_y
         cant_z_lpf = sig.decimate(cant_z-mean_cant_z, ds_factor,ftype=dlti_filter,zero_phase=True) + mean_cant_z
         laser_power = sig.decimate(self.laser_power_full-self.mean_laser_power,ds_factor,\
-                                   ftype=dlti_filter,zero_phase=True) + self.mean_laser_power
+                                    ftype=dlti_filter,zero_phase=True) + self.mean_laser_power
         p_trans = sig.decimate(self.p_trans_full-self.mean_p_trans,ds_factor,\
-                               ftype=dlti_filter,zero_phase=True) + self.mean_p_trans
+                                ftype=dlti_filter,zero_phase=True) + self.mean_p_trans
         times = self.times[::ds_factor]
-        
-        # loop through and apply the filter for all sensors specified by the
-        # input argument
-        filters = [W_x_qpd[0],W_y_qpd[0],W_z_qpd[0],W_x_pspd[0],W_y_pspd[0]]
+
+        # loop through and apply the filter for all sensors specified by the input argument
         preds = []
-        for w,filter in zip(wiener,filters):
-            if w:
-                preds.append(sig.lfilter(filter, 1.0, accel_lpf))
-            else:
-                preds.append(np.zeros_like(qpd_x_lpf))
+        accel_lpf = [accel_x_lpf,accel_y_lpf,accel_z_lpf]
+        for i in range(3):
+            filters = np.vstack([W_qpd[:,i],W_pspd[:,i]])
+            pred = []
+            for w,filter in zip(wiener,filters):
+                if w:
+                    pred.append(sig.lfilter(filter, 1.0, accel_lpf[i]))
+                else:
+                    pred.append(np.zeros_like(qpd_x_lpf))
+            preds.append(pred)
+
+        # sum the predicted cross-coupling from all accelerometer axes for each sensor
+        preds = np.sum(np.array(preds),axis=0)
 
         # subtract off the coherent noise
         qpd_x_w = qpd_x_lpf - preds[0]
@@ -1401,9 +1450,9 @@ class AggregateData:
         self.cant_bins_x = cant_bins_x
         self.cant_bins_z = cant_bins_z
 
-        # update bin indices
-        self.bin_indices[:,7] = np.array([np.abs(np.mean(self.agg_dict['accelerometer'],\
-                                                         axis=1))>accel_thresh]).astype(np.int32)
+        # if any accelerometer axis is over the threshold, set the bin index for that file to 1
+        self.bin_indices[:,7] = np.array([np.max(np.abs(np.mean(self.agg_dict['accelerometer'],\
+                                                        axis=2)),axis=1)>accel_thresh]).astype(np.int32)
         print('Done binning data.')
 
 
@@ -1591,7 +1640,7 @@ class AggregateData:
         '''
         Subtract noise measured in the accelerometer from the QPD data streams, down to the
         coherence limit. This should only be called if the "wiener" argument was set to False
-        for all channels when the data was loaded.
+        for all channels when the data was loaded. Currently only uses the accelerometer z data.
         '''
 
         print('Subtracting coherent portion of accelerometer noise from QPD data...')
@@ -1601,7 +1650,7 @@ class AggregateData:
             return
         
         # get the accelerometer data and take the DFT
-        accels = self.agg_dict['accelerometer']
+        accels = self.agg_dict['accelerometer'][:,2,:]
         if np.all(accels==0):
             print('Error: no accelerometer data found!')
             return
