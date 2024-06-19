@@ -1645,7 +1645,7 @@ class AggregateData:
         '''
         Subtract noise measured in the accelerometer from the QPD data streams, down to the
         coherence limit. This should only be called if the "wiener" argument was set to False
-        for all channels when the data was loaded. Currently only uses the accelerometer z data.
+        for all channels when the data was loaded.
         '''
 
         print('Subtracting coherent portion of accelerometer noise from QPD data...')
@@ -1655,45 +1655,56 @@ class AggregateData:
             return
         
         # get the accelerometer data and take the DFT
-        accels = self.agg_dict['accelerometer'][:,2,:]
+        accels = self.agg_dict['accelerometer']
         if np.all(accels==0):
             print('Error: no accelerometer data found!')
             return
         accels = (accels - np.mean(accels,axis=-1,keepdims=True))
         win = sig.get_window(('tukey',0.05),accels.shape[-1])
-        accel_ffts = np.fft.rfft(win[np.newaxis,:]*accels,axis=-1)[:,:len(self.agg_dict['freqs'])]
+        accel_ffts = np.fft.rfft(win[np.newaxis,np.newaxis,:]*accels,axis=-1)[:,:,:len(self.agg_dict['freqs'])]
 
         # ffts already calibrated and scaled to the correct units
         qpd_ffts = self.agg_dict['qpd_ffts_full']
-        qpd_data = np.fft.irfft(qpd_ffts,accels.shape[-1],axis=-1)[:,:2,:] #self.agg_dict['quad_raw_data']
-        qpd_null = np.fft.irfft(qpd_ffts,accels.shape[-1],axis=-1)[:,3,:] #self.agg_dict['quad_null']
+        qpd_data = np.fft.irfft(qpd_ffts,accels.shape[-1],axis=-1)[:,:2,:]
+        qpd_null = np.fft.irfft(qpd_ffts,accels.shape[-1],axis=-1)[:,3,:]
 
-        # estimate the cross spectral density between the accelerometer and each QPD channel using all datasets
-        _,pxa = sig.csd(qpd_data[:,0,:].flatten(),accels.flatten(),fs=self.agg_dict['fsamp'],\
-                        window=win,nperseg=accels.shape[-1],noverlap=None)
-        _,pya = sig.csd(qpd_data[:,1,:].flatten(),accels.flatten(),fs=self.agg_dict['fsamp'],\
-                        window=win,nperseg=accels.shape[-1],noverlap=None)
-        _,pna = sig.csd(qpd_null.flatten(),accels.flatten(),fs=self.agg_dict['fsamp'],\
-                        window=win,nperseg=accels.shape[-1],noverlap=None)
-        
-        # estimate the accelerometer power spectral density using all datasets
-        _,paa = sig.welch(accels.flatten(),fs=self.agg_dict['fsamp'],window=win,nperseg=accels.shape[-1],noverlap=None)
+        # separate the QPD data into x, y, and null channels
+        qpd_ffts_x = qpd_ffts[:,0,:]
+        qpd_ffts_y = qpd_ffts[:,1,:]
+        qpd_ffts_n = qpd_ffts[:,3,:]
 
-        # build the transfer functions
-        tf_x = pxa/paa
-        tf_y = pya/paa
-        tf_n = pna/paa
+        # loop through all accelerometer channels
+        for i in range(3):
+            # estimate the cross spectral density between the accelerometer and each QPD channel using all datasets
+            _,pxa = sig.csd(qpd_data[:,0,:].flatten(),accels[:,i,:].flatten(),fs=self.agg_dict['fsamp'],\
+                            window=win,nperseg=accels.shape[-1],noverlap=None)
+            _,pya = sig.csd(qpd_data[:,1,:].flatten(),accels[:,i,:].flatten(),fs=self.agg_dict['fsamp'],\
+                            window=win,nperseg=accels.shape[-1],noverlap=None)
+            _,pna = sig.csd(qpd_null.flatten(),accels[:,i,:].flatten(),fs=self.agg_dict['fsamp'],\
+                            window=win,nperseg=accels.shape[-1],noverlap=None)
+            
+            # estimate the accelerometer power spectral density using all datasets
+            _,paa = sig.welch(accels[:,i,:].flatten(),fs=self.agg_dict['fsamp'],window=win,\
+                              nperseg=accels.shape[-1],noverlap=None)
+            # avoid division by zero
+            paa[paa==0] = np.inf
 
-        # subtract off the coherent noise from the ffts
-        qpd_ffts_x = qpd_ffts[:,0,:] - tf_x[np.newaxis,:len(self.agg_dict['freqs'])]*accel_ffts
-        qpd_ffts_y = qpd_ffts[:,1,:] - tf_y[np.newaxis,:len(self.agg_dict['freqs'])]*accel_ffts
-        qpd_ffts_n = qpd_ffts[:,3,:] - tf_n[np.newaxis,:len(self.agg_dict['freqs'])]*accel_ffts
+            # build the transfer functions
+            tf_x = pxa/paa
+            tf_y = pya/paa
+            tf_n = pna/paa
+
+            # subtract off the coherent noise from the ffts
+            qpd_ffts_x -= tf_x[np.newaxis,:len(self.agg_dict['freqs'])]*accel_ffts[:,i,:]
+            qpd_ffts_y -= tf_y[np.newaxis,:len(self.agg_dict['freqs'])]*accel_ffts[:,i,:]
+            qpd_ffts_n -= tf_n[np.newaxis,:len(self.agg_dict['freqs'])]*accel_ffts[:,i,:]
 
         # update the ffts in the dictionary
         qpd_ffts[:,0,:] = qpd_ffts_x
         qpd_ffts[:,1,:] = qpd_ffts_y
         qpd_ffts[:,3,:] = qpd_ffts_n
         self.agg_dict['qpds_ffts_full'] = qpd_ffts
+        self.agg_dict['qpd_ffts'] = qpd_ffts[:,:,self.agg_dict['good_inds']]
 
         # change the flag to indicate that coherent noise has been subtracted
         self.noise_subtracted = True
