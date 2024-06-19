@@ -104,6 +104,7 @@ class FileData:
         self.fsamp = self.data_dict['fsamp']
         self.accelerometer = self.data_dict['accelerometer']
         self.bead_height = self.data_dict['bead_height']
+        self.camera_status = self.data_dict['camera_status']
         self.get_laser_power()
         if qpd_diag_mat is not None:
             self.qpd_diag_mat = qpd_diag_mat
@@ -188,6 +189,10 @@ class FileData:
             else:
                 dd['cantilever_axis'] = 0
             dd['bead_height'] = f.attrs['bead_height']
+            if 'camEXPstat' in these_fields:
+                dd['camera_status'] = np.array(f['camEXPstat'],dtype=int)
+            else:
+                dd['camera_status'] = np.zeros_like(dd['cant_data'][0],dtype=int)
 
         self.data_dict = dd
 
@@ -1186,6 +1191,7 @@ class AggregateData:
         quad_phases = []
         mot_likes = []
         axis_angles = []
+        camera_status = []
 
         for i,f in enumerate(self.file_data_objs):
             timestamp.append(f.times[0]*1e-9)
@@ -1216,7 +1222,7 @@ class AggregateData:
                                                 f.qpd_diag_mat[1]*f.force_cal_factors_qpd[1])\
                                                 /(np.linalg.norm(f.qpd_diag_mat[0]*f.force_cal_factors_qpd[0])\
                                                 *np.linalg.norm(f.qpd_diag_mat[1]*f.force_cal_factors_qpd[1]))))
-            # axis_angles.append()
+            camera_status.append(f.camera_status)
             if lightweight:
                 # delete the object once data has been extracted
                 self.file_data_objs[i] = FileData()
@@ -1251,6 +1257,7 @@ class AggregateData:
         quad_phases = np.array(quad_phases)
         mot_likes = np.array(mot_likes)
         axis_angles = np.array(axis_angles)
+        camera_status = np.array(camera_status)
 
         # add numpy arrays to the dictionary
         agg_dict['times'] = times
@@ -1278,6 +1285,7 @@ class AggregateData:
         agg_dict['quad_phases'] = quad_phases
         agg_dict['mot_likes'] = mot_likes
         agg_dict['axis_angles'] = axis_angles
+        agg_dict['camera_status'] = camera_status
 
         self.agg_dict = agg_dict
         print('Done building dictionary.')
