@@ -31,7 +31,7 @@ class SynthFile(FileData):
         self.make_synthetic_signal(signal_model,p0_bead,mass_bead=mass_bead,alpha=alpha,lamb=lamb)
         self.calibrate_bead_response(sensor='QPD',no_tf=True)
         self.calibrate_bead_response(sensor='PSPD',no_tf=True)
-        self.pspd_force_calibrated[2,:] = np.copy(self.qpd_force_calibrated[2,:])
+        self.xypd_force_calibrated[2,:] = np.copy(self.qpd_force_calibrated[2,:])
         self.get_ffts_and_noise(noise_bins=10)
         self.make_templates(signal_model,p0_bead,mass_bead=mass_bead)
 
@@ -99,7 +99,7 @@ class SynthFile(FileData):
 
         # add the synthetic force time series as a class attribute
         self.quad_raw_data = self.qpd_force_calibrated + forces[0,...].swapaxes(0,1)
-        self.pspd_raw_data = self.pspd_force_calibrated + forces[0,...].swapaxes(0,1)
+        self.xypd_raw_data = self.xypd_force_calibrated + forces[0,...].swapaxes(0,1)
 
 
 class SynthAggregate(AggregateData):

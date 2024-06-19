@@ -6,6 +6,7 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 from datetime import datetime
 from scipy import signal
+import scipy.stats as st
 import h5py
 from funcs import *
 from stats import *
@@ -242,7 +243,7 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000,agg_dict
     Plot the transfer functions and the fits for all axes.
 
     :path:                      path to the saved .h5 processed transfer function file
-    :sensor:                    QPD or PSPD, depending on which should be plotted
+    :sensor:                    QPD or XYPD, depending on which should be plotted
     :phase:                     if True, plot the phases, otherwise plot the amplitudes
     :agg_dict:                  if provided, data from the agg_dict will be shown rather than the data in the TF file
     :resonance_drive_factors:   factor by which the driving force was scaled down near the resonance for [x,y,z]
@@ -254,6 +255,11 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000,agg_dict
 
     # get the transfer function file with fits
     with h5py.File(path,'r') as tf_file:
+        # ensure we are looking for the correct sensor name as multiple have been used for XYPD
+        if sensor=='XYPD':
+            sensors = list(tf_file['fits'].keys())
+            sensor = [s for s in sensors if s not in ['QPD']][0]
+
         # get raw data from the processed file or the agg_dict argument
         if not phase and agg_dict is not None:
             tf_data = agg_dict[sensor.lower()+'_ffts_full'][:,:3,:]
@@ -317,7 +323,7 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000,agg_dict
         axes[2] = 'null'
         columns = 2
     rows = 3
-    if sensor=='PSPD':
+    if sensor=='XYPD':
         rows = 2
     title = 'magnitudes'
     if phase:
@@ -429,9 +435,9 @@ def visual_diag_mat(qpd_diag_mat,overlay=True):
 
 
 def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
-            pspd=True,plot_inds=None):
+            xypd=True,plot_inds=None):
     '''
-    Plof of the QPD and PSPD spectra for a given dataset.
+    Plof of the QPD and XYPD spectra for a given dataset.
     '''
     if descrip is None:
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
@@ -448,8 +454,8 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
     qpd_x_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds,0,:]*fft_to_asd)
     qpd_y_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds,1,:]*fft_to_asd)
     qpd_n_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds,3,:]*fft_to_asd)
-    pspd_x_asds = np.abs(agg_dict['pspd_ffts_full'][plot_inds,0,:]*fft_to_asd)
-    pspd_y_asds = np.abs(agg_dict['pspd_ffts_full'][plot_inds,1,:]*fft_to_asd)
+    xypd_x_asds = np.abs(agg_dict['xypd_ffts_full'][plot_inds,0,:]*fft_to_asd)
+    xypd_y_asds = np.abs(agg_dict['xypd_ffts_full'][plot_inds,1,:]*fft_to_asd)
     z_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds,2,:]*fft_to_asd)
     if accel:
     # convert accelerometer data to m/s^2 using 1000 V/g calibration factor
@@ -459,8 +465,8 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
     qpd_x_asd = np.sqrt(np.mean(qpd_x_asds**2,axis=0))
     qpd_y_asd = np.sqrt(np.mean(qpd_y_asds**2,axis=0))
     qpd_n_asd = np.sqrt(np.mean(qpd_n_asds**2,axis=0))
-    pspd_x_asd = np.sqrt(np.mean(pspd_x_asds**2,axis=0))
-    pspd_y_asd = np.sqrt(np.mean(pspd_y_asds**2,axis=0))
+    xypd_x_asd = np.sqrt(np.mean(xypd_x_asds**2,axis=0))
+    xypd_y_asd = np.sqrt(np.mean(xypd_y_asds**2,axis=0))
     z_asd = np.sqrt(np.mean(z_asds**2,axis=0))
     if accel:
         accel_asd = np.sqrt(np.mean(accel_asds**2,axis=0))
@@ -477,9 +483,9 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
         ax.semilogy(freqs,qpd_x_asd,lw=1,alpha=0.65,label='QPD $x$')
         ax.semilogy(freqs,qpd_y_asd,lw=1,alpha=0.65,label='QPD $y$')
         ax.semilogy(freqs,qpd_n_asd,lw=1,alpha=0.65,label='QPD null')
-        if pspd:
-            ax.semilogy(freqs,pspd_x_asd,lw=1,alpha=0.65,label='PSPD $x$')
-            ax.semilogy(freqs,pspd_y_asd,lw=1,alpha=0.65,label='PSPD $y$')
+        if xypd:
+            ax.semilogy(freqs,xypd_x_asd,lw=1,alpha=0.65,label='XYPD $x$')
+            ax.semilogy(freqs,xypd_y_asd,lw=1,alpha=0.65,label='XYPD $y$')
             ax.semilogy(freqs,z_asd,lw=1,alpha=0.65,label='$z$')
         if accel:
             ax2 = ax.twinx()
@@ -494,9 +500,9 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
         ax.loglog(freqs,qpd_x_asd,lw=1,alpha=0.65,label='QPD $x$')
         ax.loglog(freqs,qpd_y_asd,lw=1,alpha=0.65,label='QPD $y$')
         ax.loglog(freqs,qpd_n_asd,lw=1,alpha=0.65,label='QPD null')
-        if pspd:
-            ax.loglog(freqs,pspd_x_asd,lw=1,alpha=0.65,label='PSPD $x$')
-            ax.loglog(freqs,pspd_y_asd,lw=1,alpha=0.65,label='PSPD $y$')
+        if xypd:
+            ax.loglog(freqs,xypd_x_asd,lw=1,alpha=0.65,label='XYPD $x$')
+            ax.loglog(freqs,xypd_y_asd,lw=1,alpha=0.65,label='XYPD $y$')
             ax.loglog(freqs,z_asd,lw=1,alpha=0.65,label='$z$')
         if accel:
             ax2 = ax.twinx()
@@ -510,8 +516,8 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
             ylim = [1e-1,1e1]
         ax.semilogy(freqs,rayleigh(qpd_x_asds**2),lw=1,alpha=0.65,label='QPD $x$')
         ax.semilogy(freqs,rayleigh(qpd_y_asds**2),lw=1,alpha=0.65,label='QPD $y$')
-        ax.semilogy(freqs,rayleigh(pspd_x_asds**2),lw=1,alpha=0.65,label='PSPD $x$')
-        ax.semilogy(freqs,rayleigh(pspd_y_asds**2),lw=1,alpha=0.65,label='PSPD $y$')
+        ax.semilogy(freqs,rayleigh(xypd_x_asds**2),lw=1,alpha=0.65,label='XYPD $x$')
+        ax.semilogy(freqs,rayleigh(xypd_y_asds**2),lw=1,alpha=0.65,label='XYPD $y$')
         ax.semilogy(freqs,rayleigh(z_asds**2),lw=1,alpha=0.65,label='$z$')
         if accel:
             ax2 = ax.twinx()
@@ -526,13 +532,13 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
     if accel:
         lines = ax.lines + ax2.lines
         labels = [l.get_label() for l in lines]
-        ax.legend(lines,labels,ncol=2+int(pspd))
+        ax.legend(lines,labels,ncol=2+int(xypd))
     else:
-        ax.legend(ncol=2+int(pspd))
+        ax.legend(ncol=2+int(xypd))
 
     # for some reason memory is not released and in subsequent function calls this can cause errors
-    del qpd_x_asds,qpd_y_asds,pspd_x_asds,pspd_y_asds,z_asds,\
-        qpd_x_asd,qpd_y_asd,pspd_x_asd,pspd_y_asd,z_asd,freqs
+    del qpd_x_asds,qpd_y_asds,xypd_x_asds,xypd_y_asds,z_asds,\
+        qpd_x_asd,qpd_y_asd,xypd_x_asd,xypd_y_asd,z_asd,freqs
 
     return fig,ax
 
@@ -1107,7 +1113,7 @@ def q_alpha_fit(alphas,q_vals,alpha_hat,range=[-1,2],sigma_sys=None):
     ax[0].axhline(0,color=colors[2],ls='--',label='95\% CL threshold')
     ax[1].plot(alphas,q_vals,ls='none',marker='o',ms=4,markeredgewidth=1.5,fillstyle='none',zorder=11)
     ax[1].plot(alpha_vals,a_hat*(alpha_vals-alpha_hat)**2)
-    ax[1].axhline(chi2(1).ppf(0.95)*0.5,color=colors[2],ls='--')
+    ax[1].axhline(st.norm.ppf(1.-0.05/2.)**2,color=colors[2],ls='--')
     y_max = ax[0].get_ylim()[1]
     ax[0].set_ylim([10,y_max])
     ax[0].set_yticks(np.logspace(2,np.floor(np.log10(y_max)),max(int(np.floor(np.log10(y_max))-1),1)))

@@ -66,7 +66,7 @@ class FileData:
         self.cant_pos_calibrated = np.array(((),(),()))
         self.mean_cant_pos = np.array(())
         self.qpd_force_calibrated = np.array(((),(),()))
-        self.pspd_force_calibrated = np.array(((),(),()))
+        self.xypd_force_calibrated = np.array(((),(),()))
         self.good_inds = np.array(())
         self.cant_inds = np.array(())
         self.drive_ind = 0
@@ -74,14 +74,14 @@ class FileData:
         self.qpd_ffts = np.array(((),(),()))
         self.qpd_ffts_full = np.array(((),(),()))
         self.qpd_sb_ffts = np.array(((),(),()))
-        self.pspd_ffts = np.array(((),(),()))
-        self.pspd_ffts_full = np.array(((),(),()))
-        self.pspd_sb_ffts = np.array(((),(),()))
+        self.xypd_ffts = np.array(((),(),()))
+        self.xypd_ffts_full = np.array(((),(),()))
+        self.xypd_sb_ffts = np.array(((),(),()))
         self.template_ffts = np.array(())
         self.template_params = np.array(())
         self.cant_fft = np.array(())
         self.force_cal_factors_qpd = np.array([0,0,0])
-        self.force_cal_factors_pspd = np.array([0,0,0])
+        self.force_cal_factors_xypd = np.array([0,0,0])
         self.is_bad = False
         self.error_log = ''
         self.qpd_diag_mat = np.array(((1.,1.,-1.,-1.),\
@@ -110,7 +110,7 @@ class FileData:
             self.qpd_diag_mat = qpd_diag_mat
             self.diagonalize_qpd = True
         self.get_xyz_from_quad()
-        self.pspd_raw_data = self.data_dict['pspd_data']
+        self.xypd_raw_data = self.data_dict['xypd_data']
         self.cant_raw_data = self.data_dict['cant_data']
         self.nsamp = len(self.times)
         self.window_s1 = np.copy(self.nsamp)
@@ -123,8 +123,8 @@ class FileData:
         self.calibrate_stage_position()
         self.calibrate_bead_response(tf_path=tf_path,sensor='QPD',cal_drive_freq=cal_drive_freq,no_tf=no_tf,\
                                      force_cal_factors=force_cal_factors)
-        self.calibrate_bead_response(tf_path=tf_path,sensor='PSPD',cal_drive_freq=cal_drive_freq,no_tf=no_tf)
-        self.pspd_force_calibrated[2,:] = np.copy(self.qpd_force_calibrated[2,:])
+        self.calibrate_bead_response(tf_path=tf_path,sensor='XYPD',cal_drive_freq=cal_drive_freq,no_tf=no_tf)
+        self.xypd_force_calibrated[2,:] = np.copy(self.qpd_force_calibrated[2,:])
         self.get_boolean_cant_mask(num_harmonics=num_harmonics,harms=harms,\
                                    cant_drive_freq=cant_drive_freq,width=width)
         self.get_ffts_and_noise(noise_bins=noise_bins)
@@ -177,9 +177,9 @@ class FileData:
             else:
                 dd['p_trans'] = np.zeros_like(dd['cant_data'][0])
             if names[1] != '':
-                dd['pspd_data'] = np.array(f[names[1]])
+                dd['xypd_data'] = np.array(f[names[1]])
             else:
-                dd['pspd_data'] = np.zeros_like(dd['cant_data'])
+                dd['xypd_data'] = np.zeros_like(dd['cant_data'])
             dd['timestamp_ns'] = os.stat(self.file_name).st_mtime*1e9
             dd['fsamp'] = f.attrs['Fsamp']/f.attrs['downsamp']
             if 'cantilever_settings' in these_fields and len(f['cantilever_settings'].shape) > 0:
@@ -206,12 +206,12 @@ class FileData:
         self.p_trans_full = np.array(())
         self.cant_raw_data = np.array(((),(),()))
         self.quad_raw_data = np.array(((),(),()))
-        self.pspd_raw_data = np.array(((),(),()))
+        self.xypd_raw_data = np.array(((),(),()))
         self.quad_amps = np.array(((),(),(),(),()))
         self.quad_phases = np.array(((),(),(),(),()))
         self.cant_pos_calibrated = np.array(((),(),()))
         self.qpd_force_calibrated = np.array(((),(),()))
-        self.pspd_force_calibrated = np.array(((),(),()))
+        self.xypd_force_calibrated = np.array(((),(),()))
 
     
     def get_laser_power(self):
@@ -350,7 +350,7 @@ class FileData:
         '''
         Downsample the time series for all sensors, then use a pre-trained Wiener filter to subtract
         coherent noise coupling in from the table. Input "wiener" is a list of bools which specifies
-        whether to subtract coherent accelerometer z noise from [QPD x, QPD y, z, PSPD x, PSPD y]
+        whether to subtract coherent accelerometer z noise from [QPD x, QPD y, z, XYPD x, XYPD y]
         '''
 
         # set the downsampling factor
@@ -368,7 +368,7 @@ class FileData:
 
             # start by ensuring the filters are longer than necessary
             W_qpd = np.zeros((3,3,len(self.freqs)))
-            W_pspd = np.zeros((2,3,len(self.freqs)))
+            W_xypd = np.zeros((2,3,len(self.freqs)))
 
             axes = ['x','y','z']
             for accel_ind in range(len(axes)):
@@ -382,7 +382,7 @@ class FileData:
                     if axes[sens_ind]!='z':
                         try:
                             this_filter = np.array(filter_file[sensor_name + '/accel_' + axes[accel_ind] + '/W_' + axes[sens_ind]][0,:])
-                            W_pspd[sens_ind,accel_ind,:len(this_filter)] = this_filter
+                            W_xypd[sens_ind,accel_ind,:len(this_filter)] = this_filter
                         except KeyError:
                             pass
 
@@ -390,16 +390,16 @@ class FileData:
             min_lens = []
             if ~np.all(W_qpd==0):
                 min_lens.append(np.argwhere(W_qpd>0).max())
-            if ~np.all(W_pspd==0):
-                min_lens.append(np.argwhere(W_pspd>0).max())
+            if ~np.all(W_xypd==0):
+                min_lens.append(np.argwhere(W_xypd>0).max())
             if len(min_lens):
                 W_qpd = W_qpd[:,:,:np.amin(min_lens)+1]
-                W_pspd = W_pspd[:,:,:np.amin(min_lens)+1]
+                W_xypd = W_xypd[:,:,:np.amin(min_lens)+1]
 
         # get arrays of the raw time series
         qpd_x,qpd_y,qpd_z = tuple(self.quad_raw_data)
         qpd_n = self.quad_null
-        pspd_x,pspd_y,_ = tuple(self.pspd_raw_data)
+        xypd_x,xypd_y,_ = tuple(self.xypd_raw_data)
         accel_x,accel_y,accel_z = tuple(self.accelerometer)
         cant_x,cant_y,cant_z = tuple(self.cant_raw_data)
 
@@ -408,8 +408,8 @@ class FileData:
         qpd_y -= np.mean(qpd_y)
         qpd_z -= np.mean(qpd_z)
         qpd_n -= np.mean(qpd_n)
-        pspd_x -= np.mean(pspd_x)
-        pspd_y -= np.mean(pspd_y)
+        xypd_x -= np.mean(xypd_x)
+        xypd_y -= np.mean(xypd_y)
         accel_x -= np.mean(accel_x)
         accel_y -= np.mean(accel_y)
         accel_z -= np.mean(accel_z)
@@ -425,8 +425,8 @@ class FileData:
         qpd_y_lpf = sig.decimate(qpd_y, ds_factor, ftype=dlti_filter, zero_phase=True)
         qpd_z_lpf = sig.decimate(qpd_z, ds_factor, ftype=dlti_filter, zero_phase=True)
         qpd_n_lpf = sig.decimate(qpd_n, ds_factor, ftype=dlti_filter, zero_phase=True)
-        pspd_x_lpf = sig.decimate(pspd_x,ds_factor,ftype=dlti_filter, zero_phase=True)
-        pspd_y_lpf = sig.decimate(pspd_y,ds_factor,ftype=dlti_filter, zero_phase=True)
+        xypd_x_lpf = sig.decimate(xypd_x,ds_factor,ftype=dlti_filter, zero_phase=True)
+        xypd_y_lpf = sig.decimate(xypd_y,ds_factor,ftype=dlti_filter, zero_phase=True)
         accel_x_lpf = sig.decimate(accel_x,ds_factor,ftype=dlti_filter, zero_phase=True)
         accel_y_lpf = sig.decimate(accel_y,ds_factor,ftype=dlti_filter, zero_phase=True)
         accel_z_lpf = sig.decimate(accel_z,ds_factor,ftype=dlti_filter, zero_phase=True)
@@ -443,7 +443,7 @@ class FileData:
         preds = []
         accel_lpf = [accel_x_lpf,accel_y_lpf,accel_z_lpf]
         for i in range(3):
-            filters = np.vstack([W_qpd[:,i],W_pspd[:,i]])
+            filters = np.vstack([W_qpd[:,i],W_xypd[:,i]])
             pred = []
             for w,filter in zip(wiener,filters):
                 if w:
@@ -459,8 +459,8 @@ class FileData:
         qpd_x_w = qpd_x_lpf - preds[0]
         qpd_y_w = qpd_y_lpf - preds[1]
         qpd_z_w = qpd_z_lpf - preds[2]
-        pspd_x_w = pspd_x_lpf - preds[3]
-        pspd_y_w = pspd_y_lpf - preds[4]
+        xypd_x_w = xypd_x_lpf - preds[3]
+        xypd_y_w = xypd_y_lpf - preds[4]
 
         # window the data to remove transient artifacts from filtering
         # but not the cantilever data as force(window(cant_position))=/=window(force(cant_position))
@@ -471,14 +471,14 @@ class FileData:
         qpd_y_w *= win
         qpd_z_w *= win
         qpd_n_w = qpd_n_lpf*win
-        pspd_x_w *= win
-        pspd_y_w *= win
+        xypd_x_w *= win
+        xypd_y_w *= win
         accel_lpf *= win
 
         # replace existing class attributes with filtered data
         self.quad_raw_data = np.array((qpd_x_w, qpd_y_w, qpd_z_w))
         self.quad_null = qpd_n_w
-        self.pspd_raw_data = np.array((pspd_x_w, pspd_y_w, qpd_z_w))
+        self.xypd_raw_data = np.array((xypd_x_w, xypd_y_w, qpd_z_w))
         self.accelerometer = accel_lpf
         self.cant_raw_data = np.array((cant_x_lpf,cant_y_lpf,cant_z_lpf))
         self.laser_power_full = laser_power
@@ -546,9 +546,9 @@ class FileData:
             self.force_cal_factors_qpd = force_cal_factors
             null_raw = self.quad_null - np.mean(self.quad_null)
             null_fft = np.fft.rfft(null_raw)[:len(self.freqs)]
-        elif sensor=='PSPD':
-            raw_data = self.pspd_raw_data
-            self.force_cal_factors_pspd = force_cal_factors
+        elif sensor=='XYPD':
+            raw_data = self.xypd_raw_data
+            self.force_cal_factors_xypd = force_cal_factors
 
         # calculate the DFT of the data, then correct using the transfer function matrix
         data_fft = raw_data - np.mean(raw_data,axis=1,keepdims=True)
@@ -573,9 +573,9 @@ class FileData:
             self.qpd_force_calibrated = bead_force_cal
             calibrated_fft = np.append(calibrated_fft,force_cal_factors[0]*null_fft[np.newaxis,:],axis=0)
             self.qpd_ffts_full = calibrated_fft*norm_factor
-        elif sensor=='PSPD':
-            self.pspd_force_calibrated = bead_force_cal
-            self.pspd_ffts_full = calibrated_fft*norm_factor
+        elif sensor=='XYPD':
+            self.xypd_force_calibrated = bead_force_cal
+            self.xypd_ffts_full = calibrated_fft*norm_factor
 
 
     def tf_array_fitted(self,freqs,sensor,tf_path=None,diagonalize_qpd=False):
@@ -594,8 +594,12 @@ class FileData:
             suffix = '_diag'
 
         with h5py.File(tf_path,'r') as tf_file:
-            # Compute TF at frequencies of interest. Appropriately inverts
-            # so we can map response -> drive
+            # ensure we are looking for the correct sensor name as multiple have been used for XYPD
+            if sensor=='XYPD':
+                sensors = list(tf_file['fits'].keys())
+                sensor = [s for s in sensors if s not in ['QPD']][0]
+
+            # Compute TF at frequencies of interest. Appropriately inverts so we can map response -> drive
             Harr = np.zeros((len(freqs), 3, 3), dtype=complex)
             Harr[:,0,0] = 1/sig.freqs_zpk(tf_file['fits/'+sensor+'/zXX'],tf_file['fits/'+sensor+'/pXX'], \
                                           tf_file['fits/'+sensor+'/kXX']/tf_file.attrs['scaleFactors_'+sensor][0], 2*np.pi*freqs)[1]
@@ -792,9 +796,9 @@ class FileData:
         qpd_ffts = np.zeros((4, len(self.good_inds)), dtype=np.complex128)
         qpd_sb_ffts = np.zeros((4, len(self.good_inds)*noise_bins), dtype=np.complex128)
 
-        # # initialize arrays for the pspd ffts of x, y, and z
-        pspd_ffts = np.zeros((3, len(self.good_inds)), dtype=np.complex128)
-        pspd_sb_ffts = np.zeros((3, len(self.good_inds)*noise_bins), dtype=np.complex128)
+        # # initialize arrays for the xypd ffts of x, y, and z
+        xypd_ffts = np.zeros((3, len(self.good_inds)), dtype=np.complex128)
+        xypd_sb_ffts = np.zeros((3, len(self.good_inds)*noise_bins), dtype=np.complex128)
 
         # get the fft for the cantilever data along the driven axis
         cant_fft_full = np.fft.rfft(self.cant_pos_calibrated[self.drive_ind])
@@ -808,12 +812,12 @@ class FileData:
             # get the ffts for the given axis
             qpd_fft = self.qpd_ffts_full[resp,:]
             if resp<3:
-                pspd_fft = self.pspd_ffts_full[resp,:]
+                xypd_fft = self.xypd_ffts_full[resp,:]
 
             # add the fft to the existing array, which was initialized with zeros
             qpd_ffts[resp] += qpd_fft[self.good_inds]
             if resp<3:
-                pspd_ffts[resp] += pspd_fft[self.good_inds]
+                xypd_ffts[resp] += xypd_fft[self.good_inds]
 
             # now create a list of some number of indices on either side of the harmonic
             sideband_inds = []
@@ -839,14 +843,14 @@ class FileData:
             # finally, add the data at these indices to the array for this axis
             qpd_sb_ffts[resp] += qpd_fft[sideband_inds]
             if resp<3:
-                pspd_sb_ffts[resp] += pspd_fft[sideband_inds]
+                xypd_sb_ffts[resp] += xypd_fft[sideband_inds]
 
         # save the ffts as class attributes
         self.qpd_ffts = qpd_ffts
-        self.pspd_ffts = pspd_ffts
+        self.xypd_ffts = xypd_ffts
         self.cant_fft = cant_fft
         self.qpd_sb_ffts = qpd_sb_ffts
-        self.pspd_sb_ffts = pspd_sb_ffts
+        self.xypd_sb_ffts = xypd_sb_ffts
 
 
     def make_templates(self,signal_model,p0_bead,mass_bead=0,cant_vec=None,num_harms=10):
@@ -976,7 +980,7 @@ class AggregateData:
         self.bad_files = np.array([])
         self.error_logs = np.array([])
         self.qpd_asds = np.array(())
-        self.pspd_asds = np.array(())
+        self.xypd_asds = np.array(())
         self.signal_models = []
         self.lightweight = True
         self.first_index = first_index
@@ -1178,9 +1182,9 @@ class AggregateData:
         qpd_ffts = []
         qpd_ffts_full = []
         qpd_sb_ffts = []
-        pspd_ffts = []
-        pspd_ffts_full = []
-        pspd_sb_ffts = []
+        xypd_ffts = []
+        xypd_ffts_full = []
+        xypd_sb_ffts = []
         template_ffts = []
         template_params = []
         cant_fft = []
@@ -1206,9 +1210,9 @@ class AggregateData:
             qpd_ffts.append(f.qpd_ffts)
             qpd_ffts_full.append(f.qpd_ffts_full)
             qpd_sb_ffts.append(f.qpd_sb_ffts)
-            pspd_ffts.append(f.pspd_ffts)
-            pspd_ffts_full.append(f.pspd_ffts_full)
-            pspd_sb_ffts.append(f.pspd_sb_ffts)
+            xypd_ffts.append(f.xypd_ffts)
+            xypd_ffts_full.append(f.xypd_ffts_full)
+            xypd_sb_ffts.append(f.xypd_sb_ffts)
             template_ffts.append(f.template_ffts)
             template_params.append(f.template_params)
             cant_fft.append(f.cant_fft)
@@ -1244,9 +1248,9 @@ class AggregateData:
         qpd_ffts = np.array(qpd_ffts)
         qpd_ffts_full = np.array(qpd_ffts_full)
         qpd_sb_ffts = np.array(qpd_sb_ffts)
-        pspd_ffts = np.array(pspd_ffts)
-        pspd_ffts_full = np.array(pspd_ffts_full)
-        pspd_sb_ffts = np.array(pspd_sb_ffts)
+        xypd_ffts = np.array(xypd_ffts)
+        xypd_ffts_full = np.array(xypd_ffts_full)
+        xypd_sb_ffts = np.array(xypd_sb_ffts)
         template_ffts = np.array(template_ffts)
         template_params = np.array(template_params)
         cant_fft = np.array(cant_fft)
@@ -1272,9 +1276,9 @@ class AggregateData:
         agg_dict['qpd_ffts'] = qpd_ffts
         agg_dict['qpd_ffts_full'] = qpd_ffts_full
         agg_dict['qpd_sb_ffts'] = qpd_sb_ffts
-        agg_dict['pspd_ffts'] = pspd_ffts
-        agg_dict['pspd_ffts_full'] = pspd_ffts_full
-        agg_dict['pspd_sb_ffts'] = pspd_sb_ffts
+        agg_dict['xypd_ffts'] = xypd_ffts
+        agg_dict['xypd_ffts_full'] = xypd_ffts_full
+        agg_dict['xypd_sb_ffts'] = xypd_sb_ffts
         agg_dict['template_ffts'] = template_ffts
         agg_dict['template_params'] = template_params
         agg_dict['cant_fft'] = cant_fft
@@ -1619,7 +1623,7 @@ class AggregateData:
 
         # initialize lists to store the spectra
         qpd_asds = []
-        pspd_asds = []
+        xypd_asds = []
 
         # get a list of indices for each unique set of run conditions
         for ind,index_array in enumerate(index_arrays):
@@ -1630,18 +1634,18 @@ class AggregateData:
             qpd_asd_x = np.sqrt(np.mean(np.abs(self.agg_dict['qpd_ffts_full'][unique_inds][:,0,:]*fft_to_asd)**2,axis=0))
             qpd_asd_y = np.sqrt(np.mean(np.abs(self.agg_dict['qpd_ffts_full'][unique_inds][:,1,:]*fft_to_asd)**2,axis=0))
             qpd_asd_z = np.sqrt(np.mean(np.abs(self.agg_dict['qpd_ffts_full'][unique_inds][:,2,:]*fft_to_asd)**2,axis=0))
-            pspd_asd_x = np.sqrt(np.mean(np.abs(self.agg_dict['pspd_ffts_full'][unique_inds][:,0,:]*fft_to_asd)**2,axis=0))
-            pspd_asd_y = np.sqrt(np.mean(np.abs(self.agg_dict['pspd_ffts_full'][unique_inds][:,1,:]*fft_to_asd)**2,axis=0))
+            xypd_asd_x = np.sqrt(np.mean(np.abs(self.agg_dict['xypd_ffts_full'][unique_inds][:,0,:]*fft_to_asd)**2,axis=0))
+            xypd_asd_y = np.sqrt(np.mean(np.abs(self.agg_dict['xypd_ffts_full'][unique_inds][:,1,:]*fft_to_asd)**2,axis=0))
 
             qpd_asds.append(np.array((qpd_asd_x,qpd_asd_y,qpd_asd_z)))
-            pspd_asds.append(np.array((pspd_asd_x,pspd_asd_y)))
+            xypd_asds.append(np.array((xypd_asd_x,xypd_asd_y)))
 
             # update the bin indices
             self.bin_indices[:,9][unique_inds] = ind
 
         # add as class attributes
         self.qpd_asds = np.array(qpd_asds)
-        self.pspd_asds = np.array(pspd_asds)
+        self.xypd_asds = np.array(xypd_asds)
 
         print('Amplitude spectral densities estimated for {} sets of run conditions.'.format(self.qpd_asds.shape[0]))
 
@@ -1725,7 +1729,7 @@ class AggregateData:
 
         # keep the first two dimensions the same to avoid screwing up indexing
         self.agg_dict['qpd_ffts_full'] = np.empty_like(self.agg_dict['qpd_ffts_full'][:,:,0])[...,np.newaxis]
-        self.agg_dict['pspd_ffts_full'] = np.empty_like(self.agg_dict['pspd_ffts_full'][:,:,0])[...,np.newaxis]
+        self.agg_dict['xypd_ffts_full'] = np.empty_like(self.agg_dict['xypd_ffts_full'][:,:,0])[...,np.newaxis]
 
 
     def diagonalize_qpd(self,fit_inds=None,peak_guess=[400.,370.],width_guess=[10.,10.],plot=False):
@@ -1987,7 +1991,7 @@ class AggregateData:
             # merge amplitude spectral densities if they are all present
             if merge_asds:
                 self.qpd_asds = np.concatenate((object1.qpd_asds,object2.qpd_asds),axis=0)
-                self.pspd_asds = np.concatenate((object1.pspd_asds,object2.pspd_asds),axis=0)
+                self.xypd_asds = np.concatenate((object1.xypd_asds,object2.xypd_asds),axis=0)
             # merge the agg_dicts
             agg_dict = {}
             keys_to_skip = ['freqs','good_inds']
@@ -2096,7 +2100,7 @@ class AggregateData:
             self.cant_bins_x = np.array(f['run_params/cant_bins_x'])
             self.cant_bins_z = np.array(f['run_params/cant_bins_z'])
             self.qpd_asds = np.array(f['run_params/qpd_asds'])
-            self.pspd_asds = np.array(f['run_params/pspd_asds'])
+            self.xypd_asds = np.array(f['run_params/xypd_asds'])
 
             # fill empty attributes
             self.file_data_objs = []
