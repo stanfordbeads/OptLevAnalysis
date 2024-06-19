@@ -52,8 +52,6 @@ class FileData:
         self.data_dict = {}
         self.date = ''
         self.times = np.array(())
-        self.amps = np.array(())
-        self.phases = np.array(())
         self.accelerometer = np.array(())
         self.fsamp = 0
         self.nsamp = 0
@@ -139,49 +137,56 @@ class FileData:
 
     def read_hdf5(self):
         '''
-        Reads raw data and metadata from an hdf5 file directly into a dict.
+        Reads raw data and metadata from an hdf5 file directly into a dict. The file structure
+        may change over time as new sensors or added or removed, so all checks to ensure backwards
+        compatibility should be done in this function.
         '''
         dd = {}
         with h5py.File(self.file_name,'r') as f:
+            
+            # these are the name pairs of equivalent fields between datasets, and the list
+            # will be populated with the name used in this particular dataset for each variable
+            equiv_fields = [['seismometer','acc'],['PSPD','DCQPD']]
+            names = ['' for i in range(len(equiv_fields))]
+            these_fields = list(f.keys())
+            these_attrs = list(f.attrs.keys())
+            for i,field in enumerate(equiv_fields):
+                name = [n for n in field if n in these_fields]
+                if len(name):
+                    names[i] = name[0]
+
             dd['cant_data'] = np.array(f['cant_data'],dtype=np.float64)
             dd['quad_data'] = np.array(f['quad_data'],dtype=np.float64)
-            try:
-                try:
-                    accel = np.array(f['acc'])
-                except KeyError:
-                    accel = np.array(f['seismometer'])
+            if names[0] != '':
+                accel = np.array(f[names[0]])
                 if len(accel.shape) < 2:
                     dd['accelerometer'] = np.array([np.zeros_like(accel),\
                                                     np.zeros_like(accel),\
                                                     accel])
                 else:
                     dd['accelerometer'] = accel
-            except KeyError:
+            else:
                 dd['accelerometer'] = np.zeros_like(dd['cant_data'])
-            try:
+            if 'laser_power' in these_fields:
                 dd['laser_power'] = np.array(f['laser_power'])
-            except KeyError:
+            else:
                 dd['laser_power'] = np.zeros_like(dd['cant_data'][0])
-            try:
+            if 'p_trans' in these_fields:
                 dd['p_trans'] = np.array(f['p_trans'])
-            except KeyError:
+            else:
                 dd['p_trans'] = np.zeros_like(dd['cant_data'][0])
-            try:
-                dd['pspd_data'] = np.array(f['PSPD'])
-            except KeyError:
+            if names[1] != '':
+                dd['pspd_data'] = np.array(f[names[1]])
+            else:
                 dd['pspd_data'] = np.zeros_like(dd['cant_data'])
             dd['timestamp_ns'] = os.stat(self.file_name).st_mtime*1e9
             dd['fsamp'] = f.attrs['Fsamp']/f.attrs['downsamp']
-            try:
+            if 'cantilever_settings' in these_fields and len(f['cantilever_settings'].shape) > 0:
+                dd['cantilever_axis'] = np.argmax([list(f['cantilever_settings'])[i] for i in [1,3,5]])
+            elif 'cantilever_axis' in these_attrs:
                 dd['cantilever_axis'] = f.attrs['cantilever_axis']
-                dd['cantilever_freq'] = f.attrs['cantilever_freq']
-                cant_voltages = list(f['cantilever_settings'])
-            except:
+            else:
                 dd['cantilever_axis'] = 0
-                dd['cantilever_freq'] = 0
-                cant_voltages = np.zeros(6)
-            dd['cantilever_DC'] = [cant_voltages[i] for i in [0,2,4]]
-            dd['cantilever_amp'] = [cant_voltages[i] for i in [1,3,5]]
             dd['bead_height'] = f.attrs['bead_height']
 
         self.data_dict = dd
@@ -737,7 +742,7 @@ class FileData:
         '''
 
         # driven axis is the one with the maximum amplitude of driving voltage
-        drive_ind = np.argmax(self.data_dict['cantilever_amp'])
+        drive_ind = int(self.data_dict['cantilever_axis'])
 
         # vector of calibrated cantilever positions along the driven axis
         drive_vec = self.cant_pos_calibrated[drive_ind]
