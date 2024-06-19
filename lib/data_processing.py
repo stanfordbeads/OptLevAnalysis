@@ -249,20 +249,17 @@ class FileData:
         quad_data = self.data_dict['quad_data']
         timestamp_ns = self.data_dict['timestamp_ns']
 
-        # within a day should be good enough for now, but in future it could be calculated dynamically
-        diff_thresh = 3600.*1e9*24.*365.
+        # first timestamp should start at index 10
+        tind = 10
 
-        # first timestamp should be in first 12 elements
-        for ind in range(12):
-            # try reconstructing a timestamp by making a 64-bit object from consecutive 32-bit objects
-            ts_attempt = (np.uint32(quad_data[ind]).astype(np.uint64) << np.uint64(32)) + np.uint32(quad_data[ind+1])
+        # try reconstructing a timestamp by making a 64-bit object from consecutive 32-bit objects
+        ts_attempt = (np.uint32(quad_data[tind]).astype(np.uint64) << np.uint64(32)) + np.uint32(quad_data[tind+1])
 
-            # if it is close to the timestamp from the hdf5 file metadata, we've found the first timestamp
-            if(abs(ts_attempt - timestamp_ns) < diff_thresh):
-                tind = ind
-                if tind<10:
-                    tind += 12
-                break
+        # if it is close to the timestamp from the hdf5 file metadata, we've found the first timestamp
+        # within an hour should be good enough for now, but in future it could be calculated dynamically
+        diff_thresh = 3600.*1e9*365.
+        if(abs(ts_attempt - timestamp_ns) > diff_thresh):
+            raise Exception('Error: timestamp does not match file creation time in '+self.file_name)
 
         # now get the full array of timestamps
         time_part1 = np.uint32(quad_data[tind::12])
