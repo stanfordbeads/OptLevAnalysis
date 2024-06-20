@@ -459,7 +459,8 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
     z_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds,2,:]*fft_to_asd)
     if accel:
     # convert accelerometer data to m/s^2 using 1000 V/g calibration factor
-        accel_ffts = np.fft.rfft(agg_dict['accelerometer']*9.8/1000.,axis=1)[:,:len(freqs)]*2./window_s1
+        accel_ffts = np.fft.rfft(np.sqrt(np.sum(agg_dict['accelerometer']**2,axis=1))\
+                                 *9.8/1000.,axis=-1)[:,:len(freqs)]*2./window_s1
         accel_asds = np.abs(accel_ffts*fft_to_asd)
 
     qpd_x_asd = np.sqrt(np.mean(qpd_x_asds**2,axis=0))
@@ -564,7 +565,8 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
     units = '\mathrm{N}'
     if sensor=='accel':
         # convert accelerometer data to m/s^2 using 1000 V/g calibration factor
-        ffts = np.fft.rfft(agg_dict['accelerometer']*9.8/1000.,axis=1)[:,:len(freqs)]*2./window_s1
+        ffts = np.fft.rfft(np.sqrt(np.sum(agg_dict['accelerometer']**2,axis=1))\
+                           *9.8/1000.,axis=-1)[:,:len(freqs)]*2./window_s1
         asds = np.abs(ffts*fft_to_asd)
         axis_ind = 2
         sensor_title = 'Accel.'
