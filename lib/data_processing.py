@@ -168,7 +168,7 @@ class FileData:
                     dd['accelerometer'] = accel
             else:
                 dd['accelerometer'] = np.zeros_like(dd['cant_data'])
-            if 'laser_power' in these_fields:
+            if 'laser_power' in these_fields and len(f['laser_power']) > 0:
                 dd['laser_power'] = np.array(f['laser_power'])
             else:
                 dd['laser_power'] = np.zeros_like(dd['cant_data'][0])
@@ -433,10 +433,10 @@ class FileData:
         cant_x_lpf = sig.decimate(cant_x-mean_cant_x, ds_factor,ftype=dlti_filter,zero_phase=True) + mean_cant_x
         cant_y_lpf = sig.decimate(cant_y-mean_cant_y, ds_factor,ftype=dlti_filter,zero_phase=True) + mean_cant_y
         cant_z_lpf = sig.decimate(cant_z-mean_cant_z, ds_factor,ftype=dlti_filter,zero_phase=True) + mean_cant_z
-        laser_power = sig.decimate(self.laser_power_full-self.mean_laser_power,ds_factor,\
-                                    ftype=dlti_filter,zero_phase=True) + self.mean_laser_power
+        laser_power = sig.decimate(self.laser_power_full - self.mean_laser_power,ds_factor,\
+                                   ftype=dlti_filter,zero_phase=True) + self.mean_laser_power
         p_trans = sig.decimate(self.p_trans_full-self.mean_p_trans,ds_factor,\
-                                ftype=dlti_filter,zero_phase=True) + self.mean_p_trans
+                               ftype=dlti_filter,zero_phase=True) + self.mean_p_trans
         times = self.times[::ds_factor]
 
         # loop through and apply the filter for all sensors specified by the input argument
