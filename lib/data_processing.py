@@ -190,7 +190,7 @@ class FileData:
                 dd['cantilever_axis'] = 0
             dd['bead_height'] = f.attrs['bead_height']
             if 'camEXPstat' in these_fields:
-                dd['camera_status'] = np.array(f['camEXPstat'],dtype=int)
+                dd['camera_status'] = np.array(np.array(f['camEXPstat'])<4.8,dtype=int)
             else:
                 dd['camera_status'] = np.zeros_like(dd['cant_data'][0],dtype=int)
 
