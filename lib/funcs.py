@@ -164,3 +164,15 @@ def rayleigh(spectra):
     means = np.mean(spectra,axis=0)
 
     return stds/means
+
+def noise_inds(agg_dict):
+    '''
+    Return the indices corresponding to noise-only files in the agg_dict.
+    '''
+    return np.array([i[0] for i in np.argwhere(agg_dict['is_noise'])])
+
+def shaking_inds(agg_dict):
+    '''
+    Return the indices corresponding to files for which the attractor was shaking.
+    '''
+    return np.array([i[0] for i in np.argwhere(~agg_dict['is_noise'])])
