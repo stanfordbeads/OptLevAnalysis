@@ -478,9 +478,16 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
         [ax.axvline(3*(i+1),ls='--',lw=1.5,alpha=0.5,color='black') for i in harms]
     ax.set_ylabel('ASD [N/$\sqrt{\mathrm{Hz}}$]')
     ax.set_xlabel('Frequency [Hz]')
+
+     # if the calibration has not been applied, scale the limits so the data will still appear
+    ylim_scale = 1
+    if np.all(qpd_x_asds > 1e-14):
+        ylim_scale = 1e11
+        ax.set_ylabel('ASD [arb/$\sqrt{\mathrm{Hz}}$]')
+    
     if which=='roi':
         if ylim is None:
-            ylim = [1e-17,2e-14]
+            ylim = np.array([1e-17,2e-14])*ylim_scale
         ax.semilogy(freqs,qpd_x_asd,lw=1,alpha=0.65,label='QPD $x$')
         ax.semilogy(freqs,qpd_y_asd,lw=1,alpha=0.65,label='QPD $y$')
         if null:
@@ -498,7 +505,7 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
         ax.set_title('Calibrated spectra in ROI for '+descrip)
     elif which=='full':
         if ylim is None:
-            ylim = [1e-18,2e-14]
+            ylim = np.array([1e-18,2e-14])*ylim_scale
         ax.loglog(freqs,qpd_x_asd,lw=1,alpha=0.65,label='QPD $x$')
         ax.loglog(freqs,qpd_y_asd,lw=1,alpha=0.65,label='QPD $y$')
         if null:
@@ -579,6 +586,12 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
     else:
         asds = np.abs(agg_dict[sensor+'_ffts_full'][:,axis_ind,:])*fft_to_asd
 
+    # if the calibration has not been applied, scale the limits so the data will still appear
+    ylim_scale = 1
+    if np.all(asds > 1e-14) and sensor!='accel':
+        ylim_scale = 1e11
+        units = '\mathrm{arb}'
+
     times = agg_dict['times']
     av_times = np.mean(times,axis=1)
     start_date = datetime.fromtimestamp(av_times[0]*1e-9).strftime('%b %d, %H:%M:%S')
@@ -594,8 +607,8 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
     fig,ax = plt.subplots()
     if which=='roi':
         if (vmin is None) or (vmax is None):
-            vmin = 2e-18
-            vmax = 2e-14
+            vmin = 2e-18*ylim_scale
+            vmax = 2e-14*ylim_scale
         for i in range(spec_ray.shape[0]):
             spec_asd[i,:] = np.sqrt(np.mean(asds[i*t_bins:(i+1)*t_bins,:]**2,axis=0))
             plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
@@ -608,8 +621,8 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
         cbar.set_label('ASD [$'+units+'/\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
     elif which=='full':
         if (vmin is None) or (vmax is None):
-            vmin = 2e-19
-            vmax = 2e-14
+            vmin = 2e-19*ylim_scale
+            vmax = 2e-14*ylim_scale
         for i in range(spec_ray.shape[0]):
             spec_asd[i,:] = np.sqrt(np.mean(asds[i*t_bins:(i+1)*t_bins,:]**2,axis=0))
             plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
