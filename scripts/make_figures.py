@@ -54,6 +54,10 @@ try:
     fig.savefig(fig_path+'tf_phase_xypd.png')
 except:
     fig,ax = plt.subplots()
+    ax.text(0.23, 0.5, 'Insufficient data for this plot', fontsize=20)
+    ax.axis('off')
+    ax.set_xticks([])
+    ax.set_yticks([])
     fig.savefig(fig_path+'tf_amp_qpd.png')
     fig.savefig(fig_path+'tf_amp_xypd.png')
     fig.savefig(fig_path+'tf_phase_qpd.png')
@@ -143,6 +147,10 @@ try:
     fig.savefig(fig_path+'polar_xypd_y.png')
 except:
     fig,ax = plt.subplots()
+    ax.text(0.23, 0.5, 'Insufficient data for this plot', fontsize=20)
+    ax.axis('off')
+    ax.set_xticks([])
+    ax.set_yticks([])
     fig.savefig(fig_path+'polar_qpd_x.png')
     fig.savefig(fig_path+'polar_qpd_y.png')
     fig.savefig(fig_path+'polar_qpd_z.png')
@@ -164,6 +172,10 @@ try:
     fig.savefig(fig_path+'unwrapped_xypd_y.png')
 except:
     fig,ax = plt.subplots()
+    ax.text(0.23, 0.5, 'Insufficient data for this plot', fontsize=20)
+    ax.axis('off')
+    ax.set_xticks([])
+    ax.set_yticks([])
     fig.savefig(fig_path+'unwrapped_qpd_x.png')
     fig.savefig(fig_path+'unwrapped_qpd_y.png')
     fig.savefig(fig_path+'unwrapped_qpd_z.png')
@@ -185,6 +197,10 @@ try:
     fig.savefig(fig_path+'mles_xypd_y.png')
 except:
     fig,ax = plt.subplots()
+    ax.text(0.23, 0.5, 'Insufficient data for this plot', fontsize=20)
+    ax.axis('off')
+    ax.set_xticks([])
+    ax.set_yticks([])
     fig.savefig(fig_path+'mles_qpd_x.png')
     fig.savefig(fig_path+'mles_qpd_y.png')
     fig.savefig(fig_path+'mles_qpd_z.png')
