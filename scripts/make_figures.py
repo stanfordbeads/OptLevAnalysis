@@ -221,6 +221,10 @@ try:
     fig.savefig(fig_path+'integ_xypd.png')
 except:
     fig,ax = plt.subplots()
+    ax.text(0.23, 0.5, 'Insufficient data for this plot', fontsize=20)
+    ax.axis('off')
+    ax.set_xticks([])
+    ax.set_yticks([])
     fig.savefig(fig_path+'limit_qpd.png')
     fig.savefig(fig_path+'limit_xypd.png')
     fig.savefig(fig_path+'integ_qpd.png')
