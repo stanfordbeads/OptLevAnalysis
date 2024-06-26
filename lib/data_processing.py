@@ -89,6 +89,7 @@ class FileData:
                                       (1.,-1.,-1.,1.),\
                                       (1.,1.,1.,1.)))
         self.diagonalize_qpd = False
+        self.is_noise = False
 
 
     def load_data(self,tf_path=None,cal_drive_freq=71.0,max_freq=2500.,num_harmonics=10,\
@@ -190,7 +191,8 @@ class FileData:
                 dd['cantilever_axis'] = 0
             dd['bead_height'] = f.attrs['bead_height']
             if 'camEXPstat' in these_fields:
-                dd['camera_status'] = np.array(np.array(f['camEXPstat'])<4.8,dtype=int)
+                # threshold determined empirically from mean (~4.82) and sigma (~0.004) of TTL signal
+                dd['camera_status'] = np.array(np.array(f['camEXPstat']) < 4.8,dtype=int)
             else:
                 dd['camera_status'] = np.zeros_like(dd['cant_data'][0],dtype=int)
 
@@ -750,15 +752,12 @@ class FileData:
         # driven axis is the one with the maximum amplitude of driving voltage
         drive_ind = int(self.data_dict['cantilever_axis'])
 
-        # vector of calibrated cantilever positions along the driven axis
-        drive_vec = self.cant_pos_calibrated[drive_ind]
-
-        # fft of the cantilever position vector
-        cant_fft = np.fft.rfft(drive_vec)[:len(self.freqs)]
+        # fft of the cantilever position vector along the given axis
+        cant_fft = np.fft.rfft(self.cant_pos_calibrated[drive_ind])[:len(self.freqs)]
 
         # get the notch mask for the given harmonics, as well as the index of the fundamental
         # frequency and the drive frequency
-        drive_mask, fund_ind = self.build_drive_mask(cant_fft, self.freqs, num_harmonics=num_harmonics, \
+        drive_mask, fund_ind = self.build_drive_mask(cant_fft, self.freqs, num_harmonics=num_harmonics,\
                                                      harms=harms, width=width, cant_drive_freq=cant_drive_freq)
 
         # create array containing the indices of the values that survive the mask
@@ -768,9 +767,19 @@ class FileData:
         cant_inds = []
         for i in range(cant_harms):
             if width != 0:
-                cant_inds += list( all_inds[np.abs(self.freqs - (i+1)*self.freqs[fund_ind]) < 0.5*width] )
+                cant_inds += list(all_inds[np.abs(self.freqs - (i+1)*self.freqs[fund_ind]) < 0.5*width])
             else:
-                cant_inds.append( np.argmin(np.abs(self.freqs - (i+1)*self.freqs[fund_ind])) )
+                cant_inds.append(np.argmin(np.abs(self.freqs - (i+1)*self.freqs[fund_ind])))
+
+        # compare the drive amplitude to the noise dataset to determine if this is a noise file
+        noise_inds = np.ones_like(cant_fft)
+        noise_inds[cant_inds] = 0
+        noise_inds[self.freqs<1] = 0
+        noise_inds = noise_inds.astype(bool)
+        cant_noise = np.mean(np.abs(cant_fft[noise_inds]))
+        drive_amp = np.amax(cant_fft[cant_inds])
+        if drive_amp < 1e2*cant_noise:
+            self.is_noise = True
 
         # set indices as class attributes
         self.good_inds = good_inds # indices of frequencies where physics search is to be done
@@ -1193,6 +1202,7 @@ class AggregateData:
         mot_likes = []
         axis_angles = []
         camera_status = []
+        is_noise = []
 
         for i,f in enumerate(self.file_data_objs):
             timestamp.append(f.times[0]*1e-9)
@@ -1224,6 +1234,7 @@ class AggregateData:
                                                 /(np.linalg.norm(f.qpd_diag_mat[0]*f.force_cal_factors_qpd[0])\
                                                 *np.linalg.norm(f.qpd_diag_mat[1]*f.force_cal_factors_qpd[1]))))
             camera_status.append(f.camera_status)
+            is_noise.append(f.is_noise)
             if lightweight:
                 # delete the object once data has been extracted
                 self.file_data_objs[i] = FileData()
@@ -1259,6 +1270,7 @@ class AggregateData:
         mot_likes = np.array(mot_likes)
         axis_angles = np.array(axis_angles)
         camera_status = np.array(camera_status)
+        is_noise = np.array(is_noise)
 
         # add numpy arrays to the dictionary
         agg_dict['times'] = times
@@ -1287,6 +1299,7 @@ class AggregateData:
         agg_dict['mot_likes'] = mot_likes
         agg_dict['axis_angles'] = axis_angles
         agg_dict['camera_status'] = camera_status
+        agg_dict['is_noise'] = is_noise
 
         self.agg_dict = agg_dict
         print('Done building dictionary.')

@@ -168,7 +168,7 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None,plot_n
     Plot the cross-coupling before and after diagonalization.
     '''
     if plot_inds is None:
-        plot_inds = np.array(range(len(agg_dict['freqs'][0])))
+        plot_inds = shaking_inds(agg_dict)
 
     # get the raw QPD data to plot
     raw_qpd_1 = agg_dict['quad_amps'][plot_inds][:,0,:]
@@ -435,7 +435,7 @@ def visual_diag_mat(qpd_diag_mat,overlay=True):
 
 
 def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
-            xypd=True,plot_inds=None):
+            xypd=True,null=True,plot_inds=None):
     '''
     Plof of the QPD and XYPD spectra for a given dataset.
     '''
@@ -443,7 +443,7 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
 
     if plot_inds is None:
-        plot_inds = np.array(range(agg_dict['times'].shape[0]))
+        plot_inds = shaking_inds(agg_dict)
 
     freqs = agg_dict['freqs']
     fsamp = agg_dict['fsamp']
@@ -483,11 +483,12 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
             ylim = [1e-17,2e-14]
         ax.semilogy(freqs,qpd_x_asd,lw=1,alpha=0.65,label='QPD $x$')
         ax.semilogy(freqs,qpd_y_asd,lw=1,alpha=0.65,label='QPD $y$')
-        ax.semilogy(freqs,qpd_n_asd,lw=1,alpha=0.65,label='QPD null')
+        if null:
+            ax.semilogy(freqs,qpd_n_asd,lw=1,alpha=0.65,label='QPD null')
+        ax.semilogy(freqs,z_asd,lw=1,alpha=0.65,label='ZPD')
         if xypd:
             ax.semilogy(freqs,xypd_x_asd,lw=1,alpha=0.65,label='XYPD $x$')
             ax.semilogy(freqs,xypd_y_asd,lw=1,alpha=0.65,label='XYPD $y$')
-            ax.semilogy(freqs,z_asd,lw=1,alpha=0.65,label='$z$')
         if accel:
             ax2 = ax.twinx()
             ax2.semilogy(freqs,accel_asd,lw=1,alpha=0.65,color=colors[len(ax.lines)],label='Accel.')
@@ -500,11 +501,12 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
             ylim = [1e-18,2e-14]
         ax.loglog(freqs,qpd_x_asd,lw=1,alpha=0.65,label='QPD $x$')
         ax.loglog(freqs,qpd_y_asd,lw=1,alpha=0.65,label='QPD $y$')
-        ax.loglog(freqs,qpd_n_asd,lw=1,alpha=0.65,label='QPD null')
+        if null:
+            ax.loglog(freqs,qpd_n_asd,lw=1,alpha=0.65,label='QPD null')
+        ax.loglog(freqs,z_asd,lw=1,alpha=0.65,label='ZPD')
         if xypd:
             ax.loglog(freqs,xypd_x_asd,lw=1,alpha=0.65,label='XYPD $x$')
             ax.loglog(freqs,xypd_y_asd,lw=1,alpha=0.65,label='XYPD $y$')
-            ax.loglog(freqs,z_asd,lw=1,alpha=0.65,label='$z$')
         if accel:
             ax2 = ax.twinx()
             ax2.loglog(freqs,accel_asd,lw=1,alpha=0.65,color=colors[len(ax.lines)],label='Accel.')
@@ -519,7 +521,7 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
         ax.semilogy(freqs,rayleigh(qpd_y_asds**2),lw=1,alpha=0.65,label='QPD $y$')
         ax.semilogy(freqs,rayleigh(xypd_x_asds**2),lw=1,alpha=0.65,label='XYPD $x$')
         ax.semilogy(freqs,rayleigh(xypd_y_asds**2),lw=1,alpha=0.65,label='XYPD $y$')
-        ax.semilogy(freqs,rayleigh(z_asds**2),lw=1,alpha=0.65,label='$z$')
+        ax.semilogy(freqs,rayleigh(z_asds**2),lw=1,alpha=0.65,label='ZPD')
         if accel:
             ax2 = ax.twinx()
             ax2.semilogy(freqs,rayleigh(accel_asds**2),lw=1,alpha=0.65,color=colors[len(ax.lines)],label='Accel.')
@@ -997,7 +999,7 @@ def mle_fingerprint(agg_dict,mle_result,file_inds=None,lamb=1e-5,single_beta=Fal
     '''
 
     if file_inds is None:
-        file_inds = np.array(range(agg_dict['times'].shape[0]))
+        file_inds = shaking_inds(agg_dict)
 
     # choose which axes to include
     first_axis = 0
@@ -1145,7 +1147,7 @@ def mles_vs_time_background(agg_dict,file_inds=None,lamb=1e-5,single_beta=False,
         t_bin_width = max(60,int((agg_dict['timestamp'][-1]-agg_dict['timestamp'][0])/20))
 
     if file_inds is None:
-        file_inds = np.array(range(agg_dict['times'].shape[0]))
+        file_inds = shaking_inds(agg_dict)
     
     times = agg_dict['times'][file_inds]
     av_times = np.mean(times,axis=1)
@@ -1239,7 +1241,7 @@ def response_vs_time(agg_dict,file_inds=None,harms=[],descrip=None,t_bin_width=N
         t_bin_width = max(60,int((agg_dict['timestamp'][-1]-agg_dict['timestamp'][0])/20))
 
     if file_inds is None:
-        file_inds = np.array(range(agg_dict['times'].shape[0]))
+        file_inds = shaking_inds(agg_dict)
 
     if harms==[]:
         harm_inds = np.array(range(len(agg_dict['good_inds'])))
