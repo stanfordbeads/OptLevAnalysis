@@ -11,6 +11,8 @@ parser.add_argument('path',type=str)
 parser.add_argument('prefix',type=str)
 parser.add_argument('-num_cores',type=int,default=20)
 parser.add_argument('-no_templates',action='store_true',default=False)
+parser.add_argument('-no_tf',action='store_true',default=False)
+parser.add_argument('-no_downsample',action='store_true',default=False)
 parser.add_argument('-descrip',type=str,default='')
 parser.add_argument('-num_to_load',type=int,default=1000000)
 parser.add_argument('-chunk_size',type=int,default=100)
@@ -18,7 +20,9 @@ args = parser.parse_args()
 path = args.path
 prefix = args.prefix
 num_cores = args.num_cores
-load_templates = ~args.no_templates
+load_templates = not args.no_templates
+no_tf = args.no_tf
+downsample = not args.no_downsample
 descrip = args.descrip
 num_to_load = args.num_to_load
 chunk_size = args.chunk_size
@@ -67,7 +71,8 @@ while(len(indices)<min(num_raw_files,num_to_load)):
     # data not yet loaded
     aggdat_temp = AggregateData([path],[prefix],[descrip],num_to_load=chunk_size,first_index=first_index)
     aggdat_temp.load_yukawa_model(lambda_range=[1e-6,1e-4],num_lambdas=25)
-    aggdat_temp.load_file_data(num_cores=num_cores,load_templates=load_templates,harms=[3,5,6,8,9,12,14])
+    aggdat_temp.load_file_data(num_cores=num_cores,load_templates=load_templates,harms=[3,4,5,6,7,8,9,11,12],\
+                               no_tf=no_tf,downsample=downsample)
     
     # newly loaded + previously loaded data
     aggdat_new = AggregateData()
