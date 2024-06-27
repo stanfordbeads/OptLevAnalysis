@@ -1078,7 +1078,7 @@ class AggregateData:
             self.diagonalize = True
         else:
             qpd_diag_mats = [None]*len(self.qpd_diag_mats)
-        if any(wiener):
+        if downsample and any(wiener):
             self.noise_subtracted = True
         print('Loading data from {} files...'.format(len(self.file_list)))
         file_data_objs = Parallel(n_jobs=num_cores)(delayed(self.process_file)\

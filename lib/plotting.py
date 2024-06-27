@@ -483,6 +483,7 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
     ylim_scale = 1
     if np.all(qpd_x_asds > 1e-14):
         ylim_scale = 1e11
+        z_asd *= 1e-7
         ax.set_ylabel('ASD [arb/$\sqrt{\mathrm{Hz}}$]')
     
     if which=='roi':
@@ -591,6 +592,8 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
     if np.all(asds > 1e-14) and sensor!='accel':
         ylim_scale = 1e11
         units = '\mathrm{arb}'
+        if axis_ind==2:
+            asds *= 1e-7
 
     times = agg_dict['times']
     av_times = np.mean(times,axis=1)

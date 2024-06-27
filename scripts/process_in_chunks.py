@@ -73,6 +73,7 @@ while(len(indices)<min(num_raw_files,num_to_load)):
     aggdat_temp.load_yukawa_model(lambda_range=[1e-6,1e-4],num_lambdas=25)
     aggdat_temp.load_file_data(num_cores=num_cores,load_templates=load_templates,harms=[3,4,5,6,7,8,9,11,12],\
                                no_tf=no_tf,downsample=downsample)
+    aggdat_temp.subtract_coherent_noise()
     
     # newly loaded + previously loaded data
     aggdat_new = AggregateData()
