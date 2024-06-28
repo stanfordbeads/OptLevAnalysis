@@ -182,7 +182,10 @@ class FileData:
             else:
                 dd['xypd_data'] = np.zeros_like(dd['cant_data'])
             dd['timestamp_ns'] = os.stat(self.file_name).st_mtime*1e9
-            dd['fsamp'] = f.attrs['Fsamp']/f.attrs['downsamp']
+            if 'Fsamp' not in these_attrs:
+                dd['fsamp'] = f.attrs['FsampFPGA']/f.attrs['downsampFPGA']
+            else:
+                dd['fsamp'] = f.attrs['Fsamp']/f.attrs['downsamp']
             if 'cantilever_settings' in these_fields and len(f['cantilever_settings'].shape) > 0:
                 dd['cantilever_axis'] = np.argmax([list(f['cantilever_settings'])[i] for i in [1,3,5]])
             elif 'cantilever_axis' in these_attrs:
