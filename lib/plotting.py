@@ -140,8 +140,8 @@ def xy_on_qpd(qpd_diag_mat):
     ax1.plot(np.array([-Q_hor_xy[0],0,Q_hor_xy[0]]),np.array([-Q_hor_xy[1],0,Q_hor_xy[1]]),color=colors[1],label='QPD axes')
     ax1.plot(np.array([-Q_ver_xy[0],0,Q_ver_xy[0]]),np.array([-Q_ver_xy[1],0,Q_ver_xy[1]]),color=colors[1])
     ax1.set_title('Bead eigenspace')
-    ax1.set_xlabel('Bead $x$ [arb]')
-    ax1.set_ylabel('Bead $y$ [arb]')
+    ax1.set_xlabel('Bead $x$ [au]')
+    ax1.set_ylabel('Bead $y$ [au]')
     ax1.legend()
     ax1.set_aspect('equal')
 
@@ -229,7 +229,7 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None,plot_n
     ax.set_xlim([0,50])
     ax.set_ylim([1e-2,1e4])
     ax.set_xlabel('Frequency [Hz]')
-    ax.set_ylabel('ASD [arb/$\sqrt{\mathrm{Hz}}$]')
+    ax.set_ylabel('ASD [au/$\sqrt{\mathrm{Hz}}$]')
     ax.set_title('QPD diagonalization')
     ax.grid(which='both')
     ax.legend(ncol=3+plot_null*1)
@@ -484,7 +484,7 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
     if np.all(qpd_x_asds > 1e-14):
         ylim_scale = 1e11
         z_asd *= 1e-7
-        ax.set_ylabel('ASD [arb/$\sqrt{\mathrm{Hz}}$]')
+        ax.set_ylabel('ASD [au/$\sqrt{\mathrm{Hz}}$]')
     
     if which=='roi':
         if ylim is None:
@@ -591,7 +591,7 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
     ylim_scale = 1
     if np.all(asds > 1e-14) and sensor!='accel':
         ylim_scale = 1e11
-        units = '\mathrm{arb}'
+        units = '\mathrm{au}'
         if axis_ind==2:
             asds *= 1e-7
 
@@ -708,6 +708,8 @@ def time_evolution(agg_dict,descrip=None,sensor='qpd',axis_ind=0,\
         ax[1].plot(plot_times,phase_t[:,i],ls='none',marker='o',ms=6,alpha=0.45,\
                 label='{:.1f} Hz'.format(good_freqs[i]),color=colors(i))
     ax[0].set_ylabel('ASD [N/$\sqrt{\mathrm{Hz}}$]')
+    if np.all(asds > 1e-14):
+        ax[0].set_ylabel('ASD [au/$\sqrt{\mathrm{Hz}}$]')
     if ylim is not None:
         ax[0].set_ylim(ylim)
     ax[0].set_title('Time evolution of '+sensor.upper()+' $'+axes[axis_ind]+'$ for '+descrip)
@@ -1090,7 +1092,7 @@ def mle_fingerprint(agg_dict,mle_result,file_inds=None,lamb=1e-5,single_beta=Fal
             axs[i,j].bar(harm_labels,bkg_bar+offsets,width=0.3,color=colors[0],label='Background fit',zorder=14)
             if j==0:
                 if axes[i]=='null':
-                    axs[i,j].set_ylabel('Force in null [arb]'.format(axes[i]))
+                    axs[i,j].set_ylabel('Force in null [au]'.format(axes[i]))
                 else:
                     axs[i,j].set_ylabel('Force in ${}$ [N]'.format(axes[i]))
             if i==0 and not log:

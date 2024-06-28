@@ -73,7 +73,7 @@ class BackgroundData:
         within the AggregateData object if necessary.
         '''
         descrips = []
-        for i in range(self.num_dirs):
+        for i in self.inds:
             descrip = self.background_dict['Aperture'][i] + '_' + \
                       self.background_dict['Shield sep [um]'][i] + '_' + \
                       self.background_dict['Attractor sep [nm]'][i] + '_' + \
