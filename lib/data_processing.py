@@ -182,7 +182,7 @@ class FileData:
             else:
                 dd['xypd_data'] = np.zeros_like(dd['cant_data'])
             dd['timestamp_ns'] = os.stat(self.file_name).st_mtime*1e9
-            if 'Fsamp' not in these_attrs:
+            if 'FsampFPGA' in these_attrs:
                 dd['fsamp'] = f.attrs['FsampFPGA']/f.attrs['downsampFPGA']
             else:
                 dd['fsamp'] = f.attrs['Fsamp']/f.attrs['downsamp']
@@ -361,45 +361,56 @@ class FileData:
         # set the downsampling factor
         ds_factor = 20
 
-        # load the pre-trained filters for this data
-        with h5py.File('/data/new_trap_processed/calibrations/data_processing_filters/' +\
-                        self.date + '/wienerFilters.h5','r') as filter_file:
-            
-            # low pass filter for downsampling
-            LPF = filter_file['LPF'][:]
+        try:
+            # load the pre-trained filters for this data
+            with h5py.File('/data/new_trap_processed/calibrations/data_processing_filters/' +\
+                            self.date + '/wienerFilters.h5','r') as filter_file:
+                
+                # low pass filter for downsampling
+                LPF = filter_file['LPF'][:]
 
-            # sensor naming conventions have changed, so accept multiple names
-            sensor_name = [s for s in list(filter_file.keys()) if s not in ['QPD', 'LPF']][0]
+                # sensor naming conventions have changed, so accept multiple names
+                sensor_name = [s for s in list(filter_file.keys()) if s not in ['QPD', 'LPF']][0]
 
-            # start by ensuring the filters are longer than necessary
-            W_qpd = np.zeros((3,3,len(self.freqs)))
-            W_xypd = np.zeros((2,3,len(self.freqs)))
+                # start by ensuring the filters are longer than necessary
+                W_qpd = np.zeros((3,3,len(self.freqs)))
+                W_xypd = np.zeros((2,3,len(self.freqs)))
 
-            axes = ['x','y','z']
-            for accel_ind in range(len(axes)):
-                for sens_ind in range(len(axes)):
-                    # if the filter doesn't exist, use an array of zeros
-                    try:
-                        this_filter = np.array(filter_file['QPD/accel_' + axes[accel_ind] + '/W_' + axes[sens_ind]][0,:])
-                        W_qpd[sens_ind,accel_ind,:len(this_filter)] = this_filter
-                    except KeyError:
-                        pass
-                    if axes[sens_ind]!='z':
+                axes = ['x','y','z']
+                for accel_ind in range(len(axes)):
+                    for sens_ind in range(len(axes)):
+                        # if the filter doesn't exist, use an array of zeros
                         try:
-                            this_filter = np.array(filter_file[sensor_name + '/accel_' + axes[accel_ind] + '/W_' + axes[sens_ind]][0,:])
-                            W_xypd[sens_ind,accel_ind,:len(this_filter)] = this_filter
+                            this_filter = np.array(filter_file['QPD/accel_' + axes[accel_ind] + '/W_' + axes[sens_ind]][0,:])
+                            W_qpd[sens_ind,accel_ind,:len(this_filter)] = this_filter
                         except KeyError:
                             pass
+                        if axes[sens_ind]!='z':
+                            try:
+                                this_filter = np.array(filter_file[sensor_name + '/accel_' + axes[accel_ind] + '/W_' + axes[sens_ind]][0,:])
+                                W_xypd[sens_ind,accel_ind,:len(this_filter)] = this_filter
+                            except KeyError:
+                                pass
 
-            # truncate the filters to the minimum length
-            min_lens = []
-            if ~np.all(W_qpd==0):
-                min_lens.append(np.argwhere(W_qpd>0).max())
-            if ~np.all(W_xypd==0):
-                min_lens.append(np.argwhere(W_xypd>0).max())
-            if len(min_lens):
-                W_qpd = W_qpd[:,:,:np.amin(min_lens)+1]
-                W_xypd = W_xypd[:,:,:np.amin(min_lens)+1]
+                # truncate the filters to the minimum length
+                min_lens = []
+                if ~np.all(W_qpd==0):
+                    min_lens.append(np.argwhere(W_qpd>0).max())
+                if ~np.all(W_xypd==0):
+                    min_lens.append(np.argwhere(W_xypd>0).max())
+                if len(min_lens):
+                    W_qpd = W_qpd[:,:,:np.amin(min_lens)+1]
+                    W_xypd = W_xypd[:,:,:np.amin(min_lens)+1]
+
+                # make the DLTI filter from the zeros, poles, and gain saved in the hdf5 file
+                dlti_filter = sig.dlti(LPF,1.0)
+
+        except FileNotFoundError:
+            dlti_filter = 'iir'
+            W_qpd = np.zeros((3,3,len(self.freqs)))
+            W_xypd = np.zeros((2,3,len(self.freqs)))
+            self.error_log = 'No filters found for ' + self.file_name + \
+                             '. Defaulting to FIR for downsampling and no Wiener filtering.'
 
         # get arrays of the raw time series
         qpd_x,qpd_y,qpd_z = tuple(self.quad_raw_data)
@@ -421,9 +432,6 @@ class FileData:
         mean_cant_x = np.mean(cant_x)
         mean_cant_y = np.mean(cant_y)
         mean_cant_z = np.mean(cant_z)
-
-        # make the DLTI filter from the zeros, poles, and gain saved in the hdf5 file
-        dlti_filter = sig.dlti(LPF,1.0)
 
         # downsample the data prior to applying the Wiener filter
         qpd_x_lpf = sig.decimate(qpd_x, ds_factor, ftype=dlti_filter, zero_phase=True)
@@ -1098,6 +1106,8 @@ class AggregateData:
                 self.bin_indices[i,-1] = 1
                 bad_files.append(file_data_obj.file_name)
                 error_logs.append(file_data_obj.error_log)
+            elif file_data_obj.is_bad == False and file_data_obj.error_log != '':
+                error_logs.append(file_data_obj.error_log)
         self.file_data_objs = file_data_objs
         self.bad_files = np.array(bad_files)
         self.error_logs = np.array(error_logs)
@@ -1114,6 +1124,9 @@ class AggregateData:
         self.__purge_bad_files()
         if len(self.bad_files):
             print('Warning: {} files could not be loaded.'.format(len(self.bad_files)))
+        if len(self.error_logs):
+            print('Warning: {} files raised warnings during loading. First error log:'.format(len(self.error_logs)))
+            print(self.error_logs[0])
         # if no files are loaded correctly, print an error log to indicate why
         if len(self.file_list)==0:
             print('Error: no file data loaded correctly! First error log:')
