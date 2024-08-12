@@ -1,5 +1,5 @@
 import numpy as np
-from data_processing import FileData,AggregateData
+from optlevanalysis.data_processing import FileData,AggregateData
 
 class SynthFile(FileData):
     '''

@@ -8,8 +8,8 @@ from datetime import datetime
 from scipy import signal
 import scipy.stats as st
 import h5py
-from funcs import *
-from stats import *
+from optlevanalysis.funcs import *
+from optlevanalysis.stats import *
 np.seterr(all='ignore')
 
 
@@ -226,8 +226,6 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None,plot_n
         ax.semilogy(freqs,asd_n_corr*1e2/4,label=r'100$\times$ diag. null',color=colors[5],alpha=0.8)
     ax.set_xlim([280,420])
     ax.set_ylim([1e-1,1e2])
-    ax.set_xlim([0,50])
-    ax.set_ylim([1e-2,1e4])
     ax.set_xlabel('Frequency [Hz]')
     ax.set_ylabel('ASD [au/$\sqrt{\mathrm{Hz}}$]')
     ax.set_title('QPD diagonalization')
@@ -463,14 +461,14 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
                                  *9.8/1000.,axis=-1)[:,:len(freqs)]*2./window_s1
         accel_asds = np.abs(accel_ffts*fft_to_asd)
 
-    qpd_x_asd = np.sqrt(np.mean(qpd_x_asds**2,axis=0))
-    qpd_y_asd = np.sqrt(np.mean(qpd_y_asds**2,axis=0))
-    qpd_n_asd = np.sqrt(np.mean(qpd_n_asds**2,axis=0))
-    xypd_x_asd = np.sqrt(np.mean(xypd_x_asds**2,axis=0))
-    xypd_y_asd = np.sqrt(np.mean(xypd_y_asds**2,axis=0))
-    z_asd = np.sqrt(np.mean(z_asds**2,axis=0))
+    qpd_x_asd = np.sqrt(np.median(qpd_x_asds**2,axis=0))
+    qpd_y_asd = np.sqrt(np.median(qpd_y_asds**2,axis=0))
+    qpd_n_asd = np.sqrt(np.median(qpd_n_asds**2,axis=0))
+    xypd_x_asd = np.sqrt(np.median(xypd_x_asds**2,axis=0))
+    xypd_y_asd = np.sqrt(np.median(xypd_y_asds**2,axis=0))
+    z_asd = np.sqrt(np.median(z_asds**2,axis=0))
     if accel:
-        accel_asd = np.sqrt(np.mean(accel_asds**2,axis=0))
+        accel_asd = np.sqrt(np.median(accel_asds**2,axis=0))
 
     fig,ax = plt.subplots()
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']

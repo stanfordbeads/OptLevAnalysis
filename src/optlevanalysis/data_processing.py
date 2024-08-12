@@ -15,9 +15,9 @@ from joblib import Parallel, delayed
 from itertools import product
 from copy import deepcopy
 import subprocess
-from funcs import *
-from plotting import *
-import signals as s
+from optlevanalysis.funcs import *
+from optlevanalysis.plotting import *
+import optlevanalysis.signals as s
 
 
 # ************************************************************************ #
@@ -44,10 +44,12 @@ import signals as s
 class FileData:
 
     def __init__(self,path=''):
-        '''
-        Initializes a RawData object with some metadata attributes and a dict containing
+        """Initializes a RawData object with some metadata attributes and a dict containing
         the raw data, while setting other attributes to default values.
-        '''
+
+        :param path: _description_, defaults to ''
+        :type path: str, optional
+        """
         self.file_name = path
         self.data_dict = {}
         self.date = ''
@@ -97,9 +99,37 @@ class FileData:
                   wiener=[False,True,False,False,False],cant_drive_freq=3.0,signal_model=None,\
                   ml_model=None,p0_bead=None,mass_bead=0,lightweight=False,no_tf=False,\
                   force_cal_factors=[]):
-        '''
-        Applies calibrations to the cantilever data and QPD data, then gets FFTs for both.
-        '''
+        """Applies calibrations to the cantilever data and QPD data, then gets FFTs for both.
+
+        :param tf_path: Path to the HDF5 file containing the transfer function data and fits, defaults to None
+        :type tf_path: str, optional
+        :param cal_drive_freq: Frequency to be used when calibrating the bead response into force units, defaults to 71.0
+        :type cal_drive_freq: float, optional
+        :param max_freq: The maximum frequency to keep in the data, defaults to 2500. 
+        :type max_freq: float, optional
+        :param num_harmonics: Number of harmonics of the drive at which the response should be measured, defaults to 10
+        :type num_harmonics: int, optional
+        :param width: Width of the mask used to select harmonics, defaults to 0. Not used in typical analyses.
+        :type width: int, optional
+        :param noise_bins: Number of sideband frequency bins used to compute the noise level, defaults to 10
+        :type noise_bins: int, optional
+        :param qpd_diag_mat: Matrix used to transform QPD quadrants into x and y motion, defaults to None
+        :type qpd_diag_mat: numpy.ndarray, optional
+        :param downsample: Downsample the data, defaults to True
+        :type downsample: bool, optional
+        :param cant_drive_freq: Frequency at which the cantilever is driven, defaults to 3.0
+        :type cant_drive_freq: float, optional
+        :param signal_model: Signal model to be tested, defaults to None
+        :type signal_model: SignalModel, optional
+        :param p0_bead: Position of the bead, defaults to None
+        :type p0_bead: list, optional
+        :param mass_bead: Mass of the bead in picograms, defaults to 0. If not provided, the mass is computed from the nominal radius and density.
+        :type mass_bead: int, optional
+        :param lightweight: Drop some data after loading, defaults to False
+        :type lightweight: bool, optional
+        :param no_tf: Don't apply the transfer function calibration, defaults to False
+        :type no_tf: bool, optional
+        """
         self.date = re.search(r"\d{8,}", self.file_name)[0]
         self.read_hdf5()
         self.fsamp = self.data_dict['fsamp']
@@ -138,11 +168,10 @@ class FileData:
 
 
     def read_hdf5(self):
-        '''
-        Reads raw data and metadata from an hdf5 file directly into a dict. The file structure
+        """Reads raw data and metadata from an hdf5 file directly into a dict. The file structure
         may change over time as new sensors or added or removed, so all checks to ensure backwards
         compatibility should be done in this function.
-        '''
+        """
         dd = {}
         with h5py.File(self.file_name,'r') as f:
             
@@ -203,9 +232,8 @@ class FileData:
 
 
     def drop_raw_data(self):
-        '''
-        Drop raw data that will not be used by the AggregateData class.
-        '''
+        """Drop raw data that will not be used by the AggregateData class.
+        """
         self.data_dict = {}
         self.laser_power_full = np.array(())
         self.p_trans_full = np.array(())
@@ -220,10 +248,9 @@ class FileData:
 
     
     def get_laser_power(self):
-        '''
-        Adds the full time series of laser power and the mean for this file
+        """Adds the full time series of laser power and the mean for this file
         as attributes.
-        '''
+        """
 
         # calibration factor for laser and transmitted power readings
         milliwatts_per_count = 2.72e-9 # PLACEHOLDER, NEED TO ADD CORRECT CALIBRATION FACTOR
@@ -243,12 +270,16 @@ class FileData:
     
 
     def extract_quad(self):
-        '''
-        De-interleave the quad_data to extract timestamp, amplitude, and phase data.
+        """De-interleave the quad_data to extract timestamp, amplitude, and phase data.
         Since the read request is asynchronous, the timestamp may not be the first entry.
         First step is to identify it, then all other values can be extracted based on the index
         of the first timestamp.
-        '''
+
+        :raises Exception: If the file creation time does not match the timestamp data in the file.
+        :raises Exception: If the timestamps are scrambled, indicating that the file is bad.
+        :return: times, amplitudes, and phases of the QPD data
+        :rtype: tuple of numpy.ndarray
+        """
 
         # get the data and timestamp from the data_dict
         quad_data = self.data_dict['quad_data']
@@ -305,9 +336,8 @@ class FileData:
     
     
     def calibrate_stage_position(self):
-        '''
-        Convert voltage in cant_data into microns. Returns a tuple of x,y,z
-        '''
+        """Convert voltage in cant_data into microns.
+        """
 
         # may want to look at datasets with no cant_data
         if not len(self.cant_raw_data):
@@ -325,9 +355,9 @@ class FileData:
     
     
     def get_xyz_from_quad(self):
-        '''
-        Calculates x, y, and z from the quadrant photodiode amplitude and phase data.
-        '''
+        """Calculates x, y, and z from the quadrant photodiode amplitude and phase data.
+        Uses a QPD diagonalization matrix if one is provided.
+        """
         
         self.times,amps,phases = self.extract_quad()
 
@@ -352,11 +382,13 @@ class FileData:
 
 
     def filter_raw_data(self,wiener=[False,True,False,False,False]):
-        '''
-        Downsample the time series for all sensors, then use a pre-trained Wiener filter to subtract
+        """Downsample the time series for all sensors, then use a pre-trained Wiener filter to subtract
         coherent noise coupling in from the table. Input "wiener" is a list of bools which specifies
         whether to subtract coherent accelerometer z noise from [QPD x, QPD y, z, XYPD x, XYPD y]
-        '''
+
+        :param wiener: _description_, defaults to [False,True,False,False,False]
+        :type wiener: list, optional
+        """
 
         # set the downsampling factor
         ds_factor = 20
@@ -506,11 +538,13 @@ class FileData:
 
 
     def get_motion_likeness(self,ml_model=None):
-        '''
-        Option to use a motion-likeness metric to measure/subtract scattered light
+        """Option to use a motion-likeness metric to measure/subtract scattered light
         backrounds. Argument "ml_model" is a function that takes the amps array and
         returns motion likeness in x and y.
-        '''
+
+        :param ml_model: _description_, defaults to None
+        :type ml_model: _type_, optional
+        """
 
         _,amps,_ = self.extract_quad()
 
@@ -527,10 +561,18 @@ class FileData:
 
     def calibrate_bead_response(self,tf_path=None,sensor='QPD',cal_drive_freq=71.0,\
                                 no_tf=False,force_cal_factors=[]):
-        '''
-        Apply correction using the transfer function to calibrate the
+        """Apply correction using the transfer function to calibrate the
         x, y, and z responses.
-        '''
+
+        :param tf_path: _description_, defaults to None
+        :type tf_path: _type_, optional
+        :param sensor: _description_, defaults to 'QPD'
+        :type sensor: str, optional
+        :param cal_drive_freq: _description_, defaults to 71.0
+        :type cal_drive_freq: float, optional
+        :param force_cal_factors: _description_, defaults to []
+        :type force_cal_factors: list, optional
+        """
 
         if not no_tf:
             # for data from 2023 and later, the code will automatically find the transfer
@@ -592,10 +634,20 @@ class FileData:
 
 
     def tf_array_fitted(self,freqs,sensor,tf_path=None,diagonalize_qpd=False):
-        '''
-        Get the transfer function array from the hdf5 file containing the fitted poles,
+        """Get the transfer function array from the hdf5 file containing the fitted poles,
         zeros, and gain from the measured transfer functions along x, y, and z, and returns it.
-        '''
+
+        :param freqs: _description_
+        :type freqs: _type_
+        :param sensor: _description_
+        :type sensor: _type_
+        :param tf_path: _description_, defaults to None
+        :type tf_path: _type_, optional
+        :param diagonalize_qpd: _description_, defaults to False
+        :type diagonalize_qpd: bool, optional
+        :return: _description_
+        :rtype: _type_
+        """
 
         # transfer function data should be stored here in a folder named by the date
         if tf_path is None:
@@ -626,9 +678,19 @@ class FileData:
     
 
     def tf_array_interpolated(self,freqs,tf_path=None,cal_drive_freq=71.,suppress_off_diag=False):
-        '''
-        Extracts the interpolated transfer function array from a .trans file and returns it.
-        '''
+        """Extracts the interpolated transfer function array from a .trans file and returns it.
+
+        :param freqs: _description_
+        :type freqs: _type_
+        :param tf_path: _description_, defaults to None
+        :type tf_path: _type_, optional
+        :param cal_drive_freq: _description_, defaults to 71.
+        :type cal_drive_freq: _type_, optional
+        :param suppress_off_diag: _description_, defaults to False
+        :type suppress_off_diag: bool, optional
+        :return: _description_
+        :rtype: _type_
+        """
 
         # this tends to cause a ton of divide by zero errors that are handled later, so
         # just temporarily disable warnings
@@ -711,11 +773,25 @@ class FileData:
     
 
     def build_drive_mask(self,cant_fft,freqs,num_harmonics=10,width=0,harms=[],cant_drive_freq=3.0):
-        '''
-        Identify the fundamental drive frequency and make an array of harmonics specified
+        """Identify the fundamental drive frequency and make an array of harmonics specified
         by the function arguments, then make a notch mask of the width specified around these harmonics.
         *** Not clear that the width will ever be used, so it may be removed ***
-        '''
+
+        :param cant_fft: _description_
+        :type cant_fft: _type_
+        :param freqs: _description_
+        :type freqs: _type_
+        :param num_harmonics: _description_, defaults to 10
+        :type num_harmonics: int, optional
+        :param width: _description_, defaults to 0
+        :type width: int, optional
+        :param harms: _description_, defaults to []
+        :type harms: list, optional
+        :param cant_drive_freq: _description_, defaults to 3.0
+        :type cant_drive_freq: float, optional
+        :return: _description_
+        :rtype: _type_
+        """
 
         # find the drive frequency, ignoring the DC bin
         fund_ind = np.argmin(np.abs(self.freqs-cant_drive_freq))
@@ -756,9 +832,19 @@ class FileData:
 
 
     def get_boolean_cant_mask(self,num_harmonics=10,harms=[],width=0,cant_harms=5,cant_drive_freq=3.0):
-        '''
-        Build a boolean mask of a given width for the cantilever drive for the specified harnonics
-        '''
+        """Build a boolean mask of a given width for the cantilever drive for the specified harnonics
+
+        :param num_harmonics: _description_, defaults to 10
+        :type num_harmonics: int, optional
+        :param harms: _description_, defaults to []
+        :type harms: list, optional
+        :param width: _description_, defaults to 0
+        :type width: int, optional
+        :param cant_harms: _description_, defaults to 5
+        :type cant_harms: int, optional
+        :param cant_drive_freq: _description_, defaults to 3.0
+        :type cant_drive_freq: float, optional
+        """
 
         # driven axis is the one with the maximum amplitude of driving voltage
         drive_ind = int(self.data_dict['cantilever_axis'])
@@ -799,11 +885,13 @@ class FileData:
         self.fund_ind = fund_ind # index of the fundamental frequency
 
 
-    def get_ffts_and_noise(self,noise_bins=10):   
-        '''
-        Get the fft of the x, y, and z data at each of the harmonics and
+    def get_ffts_and_noise(self,noise_bins=10):
+        """Get the fft of the x, y, and z data at each of the harmonics and
         some side-band frequencies.
-        ''' 
+
+        :param noise_bins: _description_, defaults to 10
+        :type noise_bins: int, optional
+        """
         
         # frequency values at the specified harmonics
         harm_freqs = self.freqs[self.good_inds]
@@ -874,11 +962,21 @@ class FileData:
 
 
     def make_templates(self,signal_model,p0_bead,mass_bead=0,cant_vec=None,num_harms=10):
-        '''
-        Make a template of the response to a given signal model. This is intentionally
+        """Make a template of the response to a given signal model. This is intentionally
         written to be applicable to a generic model, but for now will only be used
         for the Yukawa-modified gravity model in which the only parameter is lambda.
-        '''
+
+        :param signal_model: _description_
+        :type signal_model: _type_
+        :param p0_bead: _description_
+        :type p0_bead: _type_
+        :param mass_bead: _description_, defaults to 0
+        :type mass_bead: int, optional
+        :param cant_vec: _description_, defaults to None
+        :type cant_vec: _type_, optional
+        :param num_harms: _description_, defaults to 10
+        :type num_harms: int, optional
+        """
 
         # mass_bead argument should be in picograms. If no bead mass provided,
         # use the nominal mass from the template
@@ -941,16 +1039,32 @@ class FileData:
 
 
 class AggregateData:
+    """_summary_
+    """
 
     def __init__(self,data_dirs=[],file_prefixes=[],descrips=[],num_to_load=1e6,\
                  first_index=0,configs=None):
-        '''
-        Takes a list of directories containing the files to be aggregated, and optionally
+        """Takes a list of directories containing the files to be aggregated, and optionally
         a list of file prefixes. If given, the list of file prefixes should be the same length as
         the list of data directories. If files with multiple prefixes are required from the same
         directory, add the directory to the list multiple times with the corresponding prefixes
         in the file_prefixes argument.
-        '''
+
+        :param data_dirs: _description_, defaults to []
+        :type data_dirs: list, optional
+        :param file_prefixes: _description_, defaults to []
+        :type file_prefixes: list, optional
+        :param descrips: _description_, defaults to []
+        :type descrips: list, optional
+        :param num_to_load: _description_, defaults to 1e6
+        :type num_to_load: _type_, optional
+        :param configs: _description_, defaults to None
+        :type configs: _type_, optional
+        :raises Exception: _description_
+        :raises Exception: _description_
+        :raises Exception: _description_
+        :raises Exception: _description_
+        """
         if isinstance(data_dirs,str):
             data_dirs = [data_dirs]
         self.data_dirs = np.array(data_dirs)
@@ -1007,10 +1121,13 @@ class AggregateData:
 
 
     def __get_file_list(self,no_config=False):
-        '''
-        Get a list of all file paths given the directories and prefixes specified
+        """Get a list of all file paths given the directories and prefixes specified
         when the object was created and set it as an object attribute.
-        '''
+
+        :param no_config: _description_, defaults to False
+        :type no_config: bool, optional
+        :raises Exception: _description_
+        """
         file_list = []
         num_files = []
         p0_bead = []
@@ -1072,10 +1189,30 @@ class AggregateData:
     def load_file_data(self,num_cores=1,diagonalize_qpd=False,load_templates=False,harms=[],\
                        max_freq=500.,downsample=True,wiener=[False,True,False,False,False],\
                        no_tf=False,force_cal_factors=[],no_config=False,ml_model=None,lightweight=True):
-        '''
-        Create a FileData object for each of the files in the file list and load
+        """Create a FileData object for each of the files in the file list and load
         in the relevant data for physics analysis.
-        '''
+
+        :param num_cores: _description_, defaults to 1
+        :type num_cores: int, optional
+        :param diagonalize_qpd: _description_, defaults to False
+        :type diagonalize_qpd: bool, optional
+        :param load_templates: _description_, defaults to False
+        :type load_templates: bool, optional
+        :param harms: _description_, defaults to []
+        :type harms: list, optional
+        :param downsample: _description_, defaults to True
+        :type downsample: bool, optional
+        :param wiener: _description_, defaults to [False,True,False,False,False]
+        :type wiener: list, optional
+        :param force_cal_factors: _description_, defaults to []
+        :type force_cal_factors: list, optional
+        :param no_config: _description_, defaults to False
+        :type no_config: bool, optional
+        :param ml_model: _description_, defaults to None
+        :type ml_model: _type_, optional
+        :param lightweight: _description_, defaults to True
+        :type lightweight: bool, optional
+        """
         if load_templates:
             if not len(self.signal_models):
                 print('Signal model not loaded! Load a signal model first. Aborting.')
@@ -1138,9 +1275,13 @@ class AggregateData:
 
 
     def load_yukawa_model(self,lambda_range=[1e-6,1e-4],num_lambdas=None):
-        '''
-        Load functions used to make Yukawa-modified gravity templates
-        '''
+        """Load functions used to make Yukawa-modified gravity templates
+
+        :param lambda_range: _description_, defaults to [1e-6,1e-4]
+        :type lambda_range: list, optional
+        :param num_lambdas: _description_, defaults to None
+        :type num_lambdas: _type_, optional
+        """
         self.__get_file_list()
         signal_models = []
         for diam in self.diam_bead:
@@ -1159,9 +1300,33 @@ class AggregateData:
     def process_file(self,file_path,qpd_diag_mat=None,signal_model=None,ml_model=None,p0_bead=None,\
                      mass_bead=0,harms=[],max_freq=500.,downsample=True,wiener=[False,True,False,False,False],\
                      no_tf=False,force_cal_factors=[],lightweight=True):
-        '''
-        Process data for an individual file and return the FileData object.
-        '''
+        """Process data for an individual file and return the FileData object.
+
+        :param file_path: _description_
+        :type file_path: _type_
+        :param qpd_diag_mat: _description_, defaults to None
+        :type qpd_diag_mat: _type_, optional
+        :param signal_model: _description_, defaults to None
+        :type signal_model: _type_, optional
+        :param ml_model: _description_, defaults to None
+        :type ml_model: _type_, optional
+        :param p0_bead: _description_, defaults to None
+        :type p0_bead: _type_, optional
+        :param harms: _description_, defaults to []
+        :type harms: list, optional
+        :param max_freq: _description_, defaults to 500.
+        :type max_freq: _type_, optional
+        :param downsample: _description_, defaults to True
+        :type downsample: bool, optional
+        :param wiener: _description_, defaults to [False,True,False,False,False]
+        :type wiener: list, optional
+        :param force_cal_factors: _description_, defaults to []
+        :type force_cal_factors: list, optional
+        :param lightweight: _description_, defaults to True
+        :type lightweight: bool, optional
+        :return: _description_
+        :rtype: _type_
+        """
         this_file = FileData(file_path)
         try:
             this_file.load_data(qpd_diag_mat=qpd_diag_mat,signal_model=signal_model,ml_model=ml_model,\
@@ -1174,10 +1339,12 @@ class AggregateData:
     
 
     def __build_dict(self,lightweight=True):
-        '''
-        Build a dict containing the relevant data from each FileData object to
+        """Build a dict containing the relevant data from each FileData object to
         make indexing the data easier.
-        '''
+
+        :param lightweight: _description_, defaults to True
+        :type lightweight: bool, optional
+        """
 
         print('Building dictionary of file data...')
         agg_dict = {}
@@ -1322,11 +1489,10 @@ class AggregateData:
 
 
     def __bin_by_config_data(self):
-        '''
-        Match the data from the config file (p0_bead, diam_bead) to the data by assigning the index
+        """Match the data from the config file (p0_bead, diam_bead) to the data by assigning the index
         of the correct value in the p0_bead and diam_bead arrays. Should be called automatically when
         files are first loaded, but never by the user.
-        '''
+        """
         # initialize the list of bin indices
         self.bin_indices = np.zeros((len(self.file_list),11)).astype(np.int32)
 
@@ -1345,13 +1511,12 @@ class AggregateData:
     
 
     def __remove_duplicate_bead_params(self):
-        '''
-        Removes duplicate p0_bead and diam_bead entries that may have resulted from loading
+        """Removes duplicate p0_bead and diam_bead entries that may have resulted from loading
         in files from multiple directories corresponding to the same bead parameters. Fixes
         the corresponding values in the bin_indices array. This way all 7um data can be called
         with a single index, rather than finding all indices for the multiple instances of 7um 
         data loaded in. Should only be called after loading or merging objects, not by the user.
-        '''
+        """
 
         # get unique diam_bead elements and their indices
         diam_beads,diam_bead_inds = np.unique(self.diam_bead,axis=0,return_index=True)
@@ -1410,10 +1575,9 @@ class AggregateData:
 
 
     def __purge_bad_files(self):
-        '''
-        Make a list of the file names that couldn't be loaded, then remove the FileData objects
+        """Make a list of the file names that couldn't be loaded, then remove the FileData objects
         and other relevant object attributes.
-        '''
+        """
         bad_file_indices = np.copy(self.bin_indices[:,-1]).astype(bool)
         self.file_list = np.delete(self.file_list,bad_file_indices,axis=0)
         self.file_data_objs = list(np.delete(self.file_data_objs,bad_file_indices,axis=0))
@@ -1421,12 +1585,18 @@ class AggregateData:
 
 
     def bin_by_aux_data(self,cant_bin_widths=[1.,1.],accel_thresh=0.1,bias_bins=0):
-        '''
-        Bins the data by some auxiliary data along a number of axes. Sets an object attribute
+        """Bins the data by some auxiliary data along a number of axes. Sets an object attribute
         containing a list of indices that can be used to specify into which bin of each parameter
         a file falls.
         bin_widths = [x_width_microns, z_width_microns]
-        '''
+
+        :param cant_bin_widths: _description_, defaults to [1.,1.]
+        :type cant_bin_widths: list, optional
+        :param accel_thresh: _description_, defaults to 0.1
+        :type accel_thresh: float, optional
+        :param bias_bins: _description_, defaults to 0
+        :type bias_bins: int, optional
+        """
         print('Binning data by mean cantilever position and accelerometer data...')
 
         # add accelerometer and bias
@@ -1500,10 +1670,12 @@ class AggregateData:
 
 
     def get_parameter_arrays(self):
-        '''
-        Returns arrays of the config data and auxiliary data for use in indexing files within the
+        """Returns arrays of the config data and auxiliary data for use in indexing files within the
         AggregateData object. This should be updated as more bins are added to bin_indices.
-        '''
+
+        :return: _description_
+        :rtype: _type_
+        """
 
         # define all parameters to be returned here
         labels = ['diam_bead', 'mass_bead','p0_bead', 'descrips', 'qpd_diag_mats', 'cant_bins_x', 'cant_bins_z']
@@ -1524,10 +1696,30 @@ class AggregateData:
         
 
     def get_slice_indices(self,diam_bead=-1.,descrip='',cant_x=[-1e4,1e4],cant_z=[-1e4,1e4],accel_veto=False):
-        '''
-        Returns a single list of indices corresponding to the positions of files that pass the
+        """Returns a single list of indices corresponding to the positions of files that pass the
         cuts given by the index array.
-        '''
+
+        :param diam_bead: _description_, defaults to -1.
+        :type diam_bead: _type_, optional
+        :param descrip: _description_, defaults to ''
+        :type descrip: str, optional
+        :param cant_x: _description_, defaults to [-1e4,1e4]
+        :type cant_x: list, optional
+        :param cant_z: _description_, defaults to [-1e4,1e4]
+        :type cant_z: list, optional
+        :param accel_veto: _description_, defaults to False
+        :type accel_veto: bool, optional
+        :raises Exception: _description_
+        :raises Exception: _description_
+        :raises Exception: _description_
+        :raises Exception: _description_
+        :raises Exception: _description_
+        :raises Exception: _description_
+        :raises Exception: _description_
+        :raises Exception: _description_
+        :return: _description_
+        :rtype: _type_
+        """
         # p0_bead shoudln't need to be specified since it can be identified by descrips if necessary
         # same with mass_bead
         # still need to add binning for bias
@@ -1633,10 +1825,9 @@ class AggregateData:
     
 
     def estimate_spectral_densities(self):
-        '''
-        Compute the amplitude spectral density for each axis and sensor, averaging over datasets
+        """Compute the amplitude spectral density for each axis and sensor, averaging over datasets
         with the same conditions as defined by bin_indices.
-        '''
+        """
 
         print('Estimating RMS amplitude spectral density for each set of run conditions...')
 
@@ -1680,11 +1871,10 @@ class AggregateData:
 
 
     def subtract_coherent_noise(self):
-        '''
-        Subtract noise measured in the accelerometer from the QPD data streams, down to the
+        """Subtract noise measured in the accelerometer from the QPD data streams, down to the
         coherence limit. This should only be called if the "wiener" argument was set to False
         for all channels when the data was loaded.
-        '''
+        """
 
         print('Subtracting coherent portion of accelerometer noise from QPD data...')
 
@@ -1751,10 +1941,9 @@ class AggregateData:
     
 
     def drop_full_ffts(self):
-        '''
-        Drops the complete spectra for each file from the dictionary to save memory. To be called
+        """Drops the complete spectra for each file from the dictionary to save memory. To be called
         after the data has been used for basic plotting.
-        '''
+        """
 
         # keep the first two dimensions the same to avoid screwing up indexing
         self.agg_dict['qpd_ffts_full'] = np.empty_like(self.agg_dict['qpd_ffts_full'][:,:,0])[...,np.newaxis]
@@ -1762,11 +1951,21 @@ class AggregateData:
 
 
     def diagonalize_qpd(self,fit_inds=None,peak_guess=[400.,370.],width_guess=[10.,10.],plot=False):
-        '''
-        Fit the two resonant peaks in x and y and diagonalize the QPD position sensing
-        to remove cross-coupling from one into the other. Writes a matrix to the config file
-        where it can be used by the FileData class to extract x and y from the raw data.
-        '''
+        """Fit the two resonant peaks in x and y and diagonalize the QPD position sensing
+        to remove cross-coupling from one into the other. Returns a matrix that can be used
+        by the FileData class to extract x and y from the raw data.
+
+        :param fit_inds: _description_, defaults to None
+        :type fit_inds: _type_, optional
+        :param peak_guess: _description_, defaults to [400.,370.]
+        :type peak_guess: list, optional
+        :param width_guess: _description_, defaults to [10.,10.]
+        :type width_guess: list, optional
+        :param plot: _description_, defaults to False
+        :type plot: bool, optional
+        :return: _description_
+        :rtype: _type_
+        """
 
         # if no argument is provided, just use all the files
         if fit_inds is None:
@@ -1807,8 +2006,8 @@ class AggregateData:
             print('Error: peak fitting failed!')
             max_ind_x = np.argmin(np.abs(freqs-peak_guess[0]))
             max_ind_y = np.argmin(np.abs(freqs-peak_guess[1]))
-            p_x = freqs[max_ind_x]
-            p_y = freqs[max_ind_y]
+            p_x = [freqs[max_ind_x],width_guess[0],1e-3]
+            p_y = [freqs[max_ind_y],width_guess[1],1e-3]
             failed = True
         max_ind_n = np.argmin(np.abs(freqs-2000.))
 
@@ -1851,7 +2050,7 @@ class AggregateData:
             ax[1].axvline(freqs[max_ind_y],color='k',alpha=0.8,ls='--',lw=1)
             ax[0].set_title('Response of individual quadrants')
             ax[1].set_xlabel('Frequency [Hz]')
-            ax[1].set_xlim([min(freq_ranges)-20,max(freq_ranges)+20])
+            ax[1].set_xlim([min(freq_ranges)-40,max(freq_ranges)+40])
             ax[0].set_ylabel('ASD [arb/$\sqrt{\mathrm{Hz}}$]')
             ax[0].set_ylim([1e-6,1e-3 ])
             ax[1].set_ylabel('Phase [degrees]')
@@ -1930,11 +2129,13 @@ class AggregateData:
 
 
     def merge_objects(self,object_list):
-        '''
-        Merge two AggregateData objects. First create a new object with no input arguments,
+        """Merge two AggregateData objects. First create a new object with no input arguments,
         then immediately call this function, passing in a list of the objects to be merged.
         The binning should then be done again to ensure the indices are set correctlly.
-        '''
+
+        :param object_list: _description_
+        :type object_list: _type_
+        """
         print('Merging {} objects...'.format(len(object_list)))
 
         # consistency checks before merging
@@ -2040,9 +2241,11 @@ class AggregateData:
 
 
     def save_to_hdf5(self,path=''):
-        '''
-        Save the data in the AggregateData object to an hdf5 file.
-        '''
+        """Save the data in the AggregateData object to an hdf5 file.
+
+        :param path: _description_, defaults to ''
+        :type path: str, optional
+        """
         print('Saving AggregateData object...')
 
         # if no path is given, construct the default from the filename
@@ -2085,9 +2288,11 @@ class AggregateData:
 
 
     def load_from_hdf5(self,path):
-        '''
-        Load the AggregateData object from an hdf5 file.
-        '''
+        """Load the AggregateData object from an hdf5 file.
+
+        :param path: _description_
+        :type path: _type_
+        """
         print('Loading AggregateData object...')
 
         # add the current hash to the file attributes
@@ -2139,10 +2344,9 @@ class AggregateData:
 
 
     def _print_attributes(self):
-        '''
-        Debugging tool to ensure that all attributes and types are preserved
+        """Debugging tool to ensure that all attributes and types are preserved
         through saving/loading/merging.
-        '''
+        """
         print('ATTRIBUTE :    TYPE')
         print('---------------------')
         for attr_name, attr_value in vars(self).items():
@@ -2150,9 +2354,8 @@ class AggregateData:
 
     
     def _print_errors(self):
-        '''
-        Debugging tool to print error logs for any files that could not be loaded.
-        '''
+        """Debugging tool to print error logs for any files that could not be loaded.
+        """
         for fil,err in zip(self.bad_files,self.error_logs):
             print(fil)
             print(err)

@@ -9,7 +9,7 @@ from joblib import Parallel, delayed
 from tqdm import tqdm
 from numba import jit
 import warnings
-from funcs import *
+from optlevanalysis.funcs import *
 
 # ************************************************************************ #
 # This file contains the functions used for statistical analysis of
@@ -459,8 +459,8 @@ def reshape_nll_args(x,data_shape,num_gammas=1,delta_means=[0.1,0.1],\
     # unpack the parameters    
     alpha = x[0]
     deltas = x[1:3]
-    gammas = x[3:-2]
-    taus = x[-2:]
+    gammas = x[3:-4]
+    taus = np.array(x[-4::2]) + np.array(1j*x[-3::2])
 
     # reshape array of gammas
     gammas = gammas.reshape(-1,len(axes),data_shape[2])
@@ -566,8 +566,8 @@ def nll_with_background(agg_dict,file_inds=None,lamb=1e-5,num_gammas=1,delta_mea
         nll_deltas = (deltas*np.ones_like(gammas) - np.array(delta_means)[np.newaxis,:,np.newaxis])**2 \
                      /(2*np.array(delta_means)[np.newaxis,:,np.newaxis]**2)
         nll_phis = (phis*np.ones_like(gammas) - np.mean(phis,axis=-1,keepdims=True))**2/(2*phi_sigma**2)
-        nll_taus = (taus*np.ones_like(gammas) - 1.)**2/(2.*tau_sigma**2)
-        nll_nuisance = nll_deltas + nll_phis + nll_taus
+        nll_taus = np.real(taus*np.ones_like(gammas) - 1.)**2/(2.*tau_sigma**2) + np.imag(taus*np.ones_like(gammas))**2/(2.*tau_sigma**2)
+        nll_nuisance = nll_deltas + nll_phis + nll_taus + np.log(np.abs(alpha))/1e5
         
         return np.sum(nll_signal) + np.sum(nll_nuisance)
     
@@ -594,8 +594,8 @@ def minimize_nll(agg_dict,file_inds=None,lamb=1e-5,num_gammas=1,\
         num_harms = len(harms)
     alpha_bound = 1e10*np.exp(2e-5/lamb)
     delta_bounds = ((-5*np.abs(delta_means[i]),5*np.abs(delta_means[i])) for i in range(2))
-    gamma_bounds = ((-1e3,1e3) for i in range(len(axes)*num_gammas*num_harms))
-    tau_bounds = ((0.1,2) for i in range(2))
+    gamma_bounds = ((-1e1,1e1) for i in range(len(axes)*num_gammas*num_harms))
+    tau_bounds = ((0.1,2),(-1,1),(0.1,2),(-1,1))
 
     # create the function to be minimized
     nll_func = nll_with_background(agg_dict,file_inds,lamb,num_gammas,\
@@ -605,8 +605,8 @@ def minimize_nll(agg_dict,file_inds=None,lamb=1e-5,num_gammas=1,\
     harm_freqs = ['{:.0f}Hz'.format(f) for f in agg_dict['freqs'][agg_dict['good_inds']]]
     names = ['alpha'] + ['delta_'+axes[i] for i in range(2)] + \
             ['gamma_'+str(i+1)+'_'+axes[k]+'_'+harm_freqs[j] for i in range(num_gammas) \
-             for k in range(len(axes)) for j in range(num_harms)] + ['tau_'+axes[i] for i in range(2)]
-    m = Minuit(nll_func,[alpha_guess]+delta_means+[0.1]*len(axes)*num_gammas*num_harms+[1.,1.],name=names)
+             for k in range(len(axes)) for j in range(num_harms)] + ['tau_'+j+axes[i] for i in range(2) for j in ['re_','im_']]
+    m = Minuit(nll_func,np.array([alpha_guess]+delta_means+[0.1]*len(axes)*num_gammas*num_harms+[1.,1.,0.,0.],dtype=np.float128),name=names)
     m.strategy = 2
     m.errordef = 0.5
     m.limits = [(-alpha_bound,alpha_bound)] + list(delta_bounds) + list(gamma_bounds) + list(tau_bounds)
@@ -628,6 +628,9 @@ def minimize_nll(agg_dict,file_inds=None,lamb=1e-5,num_gammas=1,\
 
     if not (m.valid and m.accurate):
         print('Minimization for lambda={:.2e} failed!'.format(lamb))
+
+    # # ensure the minimizer has found the true minimum by scanning
+    # m.scan().migrad()
 
     return m
 

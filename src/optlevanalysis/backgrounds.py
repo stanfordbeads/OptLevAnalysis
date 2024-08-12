@@ -1,6 +1,6 @@
 import csv
 import numpy as np
-from data_processing import AggregateData
+from optlevanalysis.data_processing import AggregateData
 
 
 class BackgroundData:
