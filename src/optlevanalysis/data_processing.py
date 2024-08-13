@@ -324,8 +324,8 @@ class FileData:
 
         # check for scrambling of timestamps, and raise an exception if found
         timesteps = np.diff(quad_times)*1e-9
-        if np.sum(timesteps > 2.0/self.fsamp):
-            raise Exception('Error: timestamps scrambed in '+self.file_name)
+        # if np.sum(timesteps > 2.0/self.fsamp):
+        #     raise Exception('Error: timestamps scrambed in '+self.file_name)
 
         # store the raw QPD data so it can be used to diagonalize the x/y responses
         self.quad_amps = np.array(amps)
@@ -397,9 +397,6 @@ class FileData:
             # load the pre-trained filters for this data
             with h5py.File('/data/new_trap_processed/calibrations/data_processing_filters/' +\
                             self.date + '/wienerFilters.h5','r') as filter_file:
-                
-                # low pass filter for downsampling
-                LPF = filter_file['LPF'][:]
 
                 # sensor naming conventions have changed, so accept multiple names
                 sensor_name = [s for s in list(filter_file.keys()) if s not in ['QPD', 'LPF']][0]
@@ -434,15 +431,14 @@ class FileData:
                     W_qpd = W_qpd[:,:,:np.amin(min_lens)+1]
                     W_xypd = W_xypd[:,:,:np.amin(min_lens)+1]
 
-                # make the DLTI filter from the zeros, poles, and gain saved in the hdf5 file
-                dlti_filter = sig.dlti(LPF,1.0)
-
         except FileNotFoundError:
-            dlti_filter = 'iir'
             W_qpd = np.zeros((3,3,len(self.freqs)))
             W_xypd = np.zeros((2,3,len(self.freqs)))
             self.error_log = 'No filters found for ' + self.file_name + \
-                             '. Defaulting to FIR for downsampling and no Wiener filtering.'
+                             '. Wiener filtering not applied to this dataset.'
+
+        # design a low pass filter for downsampling
+        LPF = sig.iirdesign(125, 150, 0.01, 160, output='sos', fs=self.fsamp)
 
         # get arrays of the raw time series
         qpd_x,qpd_y,qpd_z = tuple(self.quad_raw_data)
@@ -466,22 +462,20 @@ class FileData:
         mean_cant_z = np.mean(cant_z)
 
         # downsample the data prior to applying the Wiener filter
-        qpd_x_lpf = sig.decimate(qpd_x, ds_factor, ftype=dlti_filter, zero_phase=True)
-        qpd_y_lpf = sig.decimate(qpd_y, ds_factor, ftype=dlti_filter, zero_phase=True)
-        qpd_z_lpf = sig.decimate(qpd_z, ds_factor, ftype=dlti_filter, zero_phase=True)
-        qpd_n_lpf = sig.decimate(qpd_n, ds_factor, ftype=dlti_filter, zero_phase=True)
-        xypd_x_lpf = sig.decimate(xypd_x,ds_factor,ftype=dlti_filter, zero_phase=True)
-        xypd_y_lpf = sig.decimate(xypd_y,ds_factor,ftype=dlti_filter, zero_phase=True)
-        accel_x_lpf = sig.decimate(accel_x,ds_factor,ftype=dlti_filter, zero_phase=True)
-        accel_y_lpf = sig.decimate(accel_y,ds_factor,ftype=dlti_filter, zero_phase=True)
-        accel_z_lpf = sig.decimate(accel_z,ds_factor,ftype=dlti_filter, zero_phase=True)
-        cant_x_lpf = sig.decimate(cant_x-mean_cant_x, ds_factor,ftype=dlti_filter,zero_phase=True) + mean_cant_x
-        cant_y_lpf = sig.decimate(cant_y-mean_cant_y, ds_factor,ftype=dlti_filter,zero_phase=True) + mean_cant_y
-        cant_z_lpf = sig.decimate(cant_z-mean_cant_z, ds_factor,ftype=dlti_filter,zero_phase=True) + mean_cant_z
-        laser_power = sig.decimate(self.laser_power_full - self.mean_laser_power,ds_factor,\
-                                   ftype=dlti_filter,zero_phase=True) + self.mean_laser_power
-        p_trans = sig.decimate(self.p_trans_full-self.mean_p_trans,ds_factor,\
-                               ftype=dlti_filter,zero_phase=True) + self.mean_p_trans
+        qpd_x_lpf = gv_decimate(qpd_x, ds_factor, LPF)
+        qpd_y_lpf = gv_decimate(qpd_y, ds_factor, LPF)
+        qpd_z_lpf = gv_decimate(qpd_z, ds_factor, LPF)
+        qpd_n_lpf = gv_decimate(qpd_n, ds_factor, LPF)
+        xypd_x_lpf = gv_decimate(xypd_x,ds_factor, LPF)
+        xypd_y_lpf = gv_decimate(xypd_y, ds_factor, LPF)
+        accel_x_lpf = gv_decimate(accel_x, ds_factor, LPF)
+        accel_y_lpf = gv_decimate(accel_y, ds_factor, LPF)
+        accel_z_lpf = gv_decimate(accel_z, ds_factor, LPF)
+        cant_x_lpf = gv_decimate(cant_x-mean_cant_x, ds_factor, LPF) + mean_cant_x
+        cant_y_lpf = gv_decimate(cant_y-mean_cant_y, ds_factor, LPF) + mean_cant_y
+        cant_z_lpf = gv_decimate(cant_z-mean_cant_z, ds_factor, LPF) + mean_cant_z
+        laser_power = gv_decimate(self.laser_power_full - self.mean_laser_power, ds_factor, LPF) + self.mean_laser_power
+        p_trans = gv_decimate(self.p_trans_full-self.mean_p_trans, ds_factor, LPF) + self.mean_p_trans
         times = self.times[::ds_factor]
 
         # loop through and apply the filter for all sensors specified by the input argument
@@ -1870,7 +1864,7 @@ class AggregateData:
         print('Amplitude spectral densities estimated for {} sets of run conditions.'.format(self.qpd_asds.shape[0]))
 
 
-    def subtract_coherent_noise(self):
+    def subtract_coherent_noise(self, acc_channels=[2]):
         """Subtract noise measured in the accelerometer from the QPD data streams, down to the
         coherence limit. This should only be called if the "wiener" argument was set to False
         for all channels when the data was loaded.
@@ -1893,23 +1887,28 @@ class AggregateData:
 
         # ffts already calibrated and scaled to the correct units
         qpd_ffts = self.agg_dict['qpd_ffts_full']
-        qpd_data = np.fft.irfft(qpd_ffts,accels.shape[-1],axis=-1)[:,:2,:]
-        qpd_null = np.fft.irfft(qpd_ffts,accels.shape[-1],axis=-1)[:,3,:]
+        qpd_data = np.fft.irfft(qpd_ffts, accels.shape[-1], axis=-1)[:,:3,:]
+        qpd_null = np.fft.irfft(qpd_ffts, accels.shape[-1], axis=-1)[:,3,:]
 
         # separate the QPD data into x, y, and null channels
         qpd_ffts_x = qpd_ffts[:,0,:]
         qpd_ffts_y = qpd_ffts[:,1,:]
+        qpd_ffts_z = qpd_ffts[:,2,:]
         qpd_ffts_n = qpd_ffts[:,3,:]
 
         # loop through all accelerometer channels
         for i in range(3):
+            if i not in acc_channels:
+                continue
             # estimate the cross spectral density between the accelerometer and each QPD channel using all datasets
-            _,pxa = sig.csd(qpd_data[:,0,:].flatten(),accels[:,i,:].flatten(),fs=self.agg_dict['fsamp'],\
-                            window=win,nperseg=accels.shape[-1],noverlap=None)
-            _,pya = sig.csd(qpd_data[:,1,:].flatten(),accels[:,i,:].flatten(),fs=self.agg_dict['fsamp'],\
-                            window=win,nperseg=accels.shape[-1],noverlap=None)
-            _,pna = sig.csd(qpd_null.flatten(),accels[:,i,:].flatten(),fs=self.agg_dict['fsamp'],\
-                            window=win,nperseg=accels.shape[-1],noverlap=None)
+            _, pxa = sig.csd(qpd_data[:,0,:].flatten(),accels[:,i,:].flatten(),fs=self.agg_dict['fsamp'],\
+                             window=win,nperseg=accels.shape[-1],noverlap=None)
+            _, pya = sig.csd(qpd_data[:,1,:].flatten(),accels[:,i,:].flatten(),fs=self.agg_dict['fsamp'],\
+                             window=win,nperseg=accels.shape[-1],noverlap=None)
+            _, pza = sig.csd(qpd_data[:,2,:].flatten(),accels[:,i,:].flatten(),fs=self.agg_dict['fsamp'],\
+                             window=win,nperseg=accels.shape[-1],noverlap=None)
+            _, pna = sig.csd(qpd_null.flatten(),accels[:,i,:].flatten(),fs=self.agg_dict['fsamp'],\
+                             window=win,nperseg=accels.shape[-1],noverlap=None)
             
             # estimate the accelerometer power spectral density using all datasets
             _,paa = sig.welch(accels[:,i,:].flatten(),fs=self.agg_dict['fsamp'],window=win,\
@@ -1920,16 +1919,31 @@ class AggregateData:
             # build the transfer functions
             tf_x = pxa/paa
             tf_y = pya/paa
+            tf_z = pza/paa
             tf_n = pna/paa
+
+            fig, ax = plt.subplots(2, figsize=(7,9), sharex=True)
+            ax[0].loglog(_, np.abs(tf_z), lw=1)
+            ax[1].plot(_, np.angle(tf_z)*180./np.pi, lw=1, ls='none', marker='o', ms=2, fillstyle='none')
+            ax[0].set_xlim([0,500])
+            ax[1].set_ylim([-180,180])
+            ax[0].grid(which='both')
+            ax[1].grid(which='both')
+            ax[1].set_xlabel('Frequency [Hz]')
+            ax[0].set_ylabel('Magnitude [$z$ counts/$a$ count]')
+            ax[1].set_ylabel('Phase [$^\circ$]')
+            fig.suptitle('Transfer function from accelerometer ${}$ to QPD $z$'.format(['x', 'y', 'z'][i]))
 
             # subtract off the coherent noise from the ffts
             qpd_ffts_x -= tf_x[np.newaxis,:len(self.agg_dict['freqs'])]*accel_ffts[:,i,:]
             qpd_ffts_y -= tf_y[np.newaxis,:len(self.agg_dict['freqs'])]*accel_ffts[:,i,:]
+            qpd_ffts_z -= tf_z[np.newaxis,:len(self.agg_dict['freqs'])]*accel_ffts[:,i,:]
             qpd_ffts_n -= tf_n[np.newaxis,:len(self.agg_dict['freqs'])]*accel_ffts[:,i,:]
 
         # update the ffts in the dictionary
         qpd_ffts[:,0,:] = qpd_ffts_x
         qpd_ffts[:,1,:] = qpd_ffts_y
+        qpd_ffts[:,2,:] = qpd_ffts_z
         qpd_ffts[:,3,:] = qpd_ffts_n
         self.agg_dict['qpds_ffts_full'] = qpd_ffts
         self.agg_dict['qpd_ffts'] = qpd_ffts[:,:,self.agg_dict['good_inds']]

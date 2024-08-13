@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.optimize import curve_fit
+import scipy.signal as sig
 
 '''
 Miscellaneous functions used for data reduction/calibration.
@@ -176,3 +177,13 @@ def shaking_inds(agg_dict):
     Return the indices corresponding to files for which the attractor was shaking.
     '''
     return np.array([i[0] for i in np.argwhere(~agg_dict['is_noise'])])
+
+def gv_decimate(x, q, LPF, axis=-1):
+    '''
+    Implements same functionality as Scipy's decimate,
+    but with SOS filtering.
+    '''
+    sl = [slice(None)] * x.ndim
+    sl[axis] = slice(None, None, q)
+    y = sig.sosfiltfilt(LPF, x)
+    return y[tuple(sl)]
