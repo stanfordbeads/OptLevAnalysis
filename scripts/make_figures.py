@@ -5,9 +5,9 @@ import argparse
 from matplotlib import pyplot as plt
 from matplotlib import style
 style.use('optlevstyle.mplstyle')
-from data_processing import AggregateData
-import plotting as pl
-from funcs import *
+from optlevanalysis.data_processing import AggregateData
+import optlevanalysis.plotting as pl
+from optlevanalysis.funcs import *
 
 # command line arguments
 parser = argparse.ArgumentParser()

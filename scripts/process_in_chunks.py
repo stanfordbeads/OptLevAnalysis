@@ -1,6 +1,6 @@
 import sys
 import os
-from data_processing import AggregateData
+from optlevanalysis.data_processing import AggregateData
 import argparse
 
 import time

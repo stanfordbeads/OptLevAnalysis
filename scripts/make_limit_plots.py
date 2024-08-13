@@ -1,11 +1,11 @@
-import data_processing as dp
-import plotting as pl
+import optlevanalysis.data_processing as dp
+import optlevanalysis.plotting as pl
 from matplotlib import style
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 import numpy as np
 import h5py
-from stats import *
+from optlevanalysis.stats import *
 import argparse
 style.use('optlevstyle.mplstyle')
 
