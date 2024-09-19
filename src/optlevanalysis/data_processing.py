@@ -22,7 +22,7 @@ import optlevanalysis.signals as s
 
 # ************************************************************************ #
 # This module contains the FileData class, used to extract data from a
-# single hdf5 file, and the AggregateData class, used to aggregate data
+# single HDF5 file, and the AggregateData class, used to aggregate data
 # relevant to the physics analysis from many FileData objects. This code
 # builds on previous analysis code written by Chas Blakemore, Alex Rider,
 # David Moore, and others.
@@ -47,7 +47,7 @@ class FileData:
         """Initializes a RawData object with some metadata attributes and a dict containing
         the raw data, while setting other attributes to default values.
 
-        :param path: _description_, defaults to ''
+        :param path: Path to the raw HDF5 file, defaults to ''
         :type path: str, optional
         """
         self.file_name = path
@@ -96,9 +96,9 @@ class FileData:
 
     def load_data(self,tf_path=None,cal_drive_freq=71.0,max_freq=2500.,num_harmonics=10,\
                   harms=[],width=0,noise_bins=10,qpd_diag_mat=None,downsample=True,\
-                  wiener=[False,True,False,False,False],cant_drive_freq=3.0,signal_model=None,\
-                  ml_model=None,p0_bead=None,mass_bead=0,lightweight=False,no_tf=False,\
-                  force_cal_factors=[]):
+                  wiener=[False,True,False,False,False],time_domain=False,cant_drive_freq=3.0,\
+                  signal_model=None,ml_model=None,p0_bead=None,mass_bead=0,lightweight=False,\
+                  no_tf=False,force_cal_factors=[]):
         """Applies calibrations to the cantilever data and QPD data, then gets FFTs for both.
 
         :param tf_path: Path to the HDF5 file containing the transfer function data and fits, defaults to None
@@ -117,6 +117,11 @@ class FileData:
         :type qpd_diag_mat: numpy.ndarray, optional
         :param downsample: Downsample the data, defaults to True
         :type downsample: bool, optional
+        :param wiener: a list that specifies which signal streams the noise data should be subtracted from, 
+        defaults to [False, True, False, False, False]
+        :type wiener: list of bools, optional
+        :param time_domain: Apply the Wiener filter in the time domain, defaults to False
+        :type time_domain: bool, optional
         :param cant_drive_freq: Frequency at which the cantilever is driven, defaults to 3.0
         :type cant_drive_freq: float, optional
         :param signal_model: Signal model to be tested, defaults to None
@@ -150,7 +155,7 @@ class FileData:
         freqs = np.fft.rfftfreq(self.nsamp, d=1.0/self.fsamp)
         self.freqs = freqs[freqs<=max_freq]
         if downsample:
-            self.filter_raw_data(wiener)
+            self.filter_raw_data(wiener, time_domain)
         self.calibrate_stage_position()
         self.calibrate_bead_response(tf_path=tf_path,sensor='QPD',cal_drive_freq=cal_drive_freq,no_tf=no_tf,\
                                      force_cal_factors=force_cal_factors)
@@ -168,7 +173,7 @@ class FileData:
 
 
     def read_hdf5(self):
-        """Reads raw data and metadata from an hdf5 file directly into a dict. The file structure
+        """Reads raw data and metadata from an HDF5 file directly into a dict. The file structure
         may change over time as new sensors or added or removed, so all checks to ensure backwards
         compatibility should be done in this function.
         """
@@ -232,7 +237,7 @@ class FileData:
 
 
     def drop_raw_data(self):
-        """Drop raw data that will not be used by the AggregateData class.
+        """Drops raw data that will not be used by the AggregateData class.
         """
         self.data_dict = {}
         self.laser_power_full = np.array(())
@@ -270,7 +275,7 @@ class FileData:
     
 
     def extract_quad(self):
-        """De-interleave the quad_data to extract timestamp, amplitude, and phase data.
+        """De-interleaves the quad_data to extract timestamp, amplitude, and phase data.
         Since the read request is asynchronous, the timestamp may not be the first entry.
         First step is to identify it, then all other values can be extracted based on the index
         of the first timestamp.
@@ -291,7 +296,7 @@ class FileData:
         # try reconstructing a timestamp by making a 64-bit object from consecutive 32-bit objects
         ts_attempt = (np.uint32(quad_data[tind]).astype(np.uint64) << np.uint64(32)) + np.uint32(quad_data[tind+1])
 
-        # if it is close to the timestamp from the hdf5 file metadata, we've found the first timestamp
+        # if it is close to the timestamp from the HDF5 file metadata, we've found the first timestamp
         # within an hour should be good enough for now, but in future it could be calculated dynamically
         diff_thresh = 3600.*1e9*365.
         if(abs(ts_attempt - timestamp_ns) > diff_thresh):
@@ -336,7 +341,7 @@ class FileData:
     
     
     def calibrate_stage_position(self):
-        """Convert voltage in cant_data into microns.
+        """Converts voltage in `cant_data` into microns.
         """
 
         # may want to look at datasets with no cant_data
@@ -381,18 +386,117 @@ class FileData:
         self.quad_null = n.astype(np.float64)/quad_sum
 
 
-    def filter_raw_data(self,wiener=[False,True,False,False,False]):
-        """Downsample the time series for all sensors, then use a pre-trained Wiener filter to subtract
-        coherent noise coupling in from the table. Input "wiener" is a list of bools which specifies
+    def filter_raw_data(self,wiener=[False,True,False,False,False],time_domain=False):
+        """Downsamples the time series for all sensors, then use a pre-trained Wiener filter to subtract
+        coherent noise coupling in from the table. Input `wiener` is a list of bools which specifies
         whether to subtract coherent accelerometer z noise from [QPD x, QPD y, z, XYPD x, XYPD y]
 
-        :param wiener: _description_, defaults to [False,True,False,False,False]
-        :type wiener: list, optional
+        :param wiener: a list that specifies which signal streams the noise data should be subtracted from, 
+        defaults to [False, True, False, False, False]
+        :type wiener: list of bools, optional
         """
 
         # set the downsampling factor
         ds_factor = 20
 
+        # design a low pass filter for downsampling
+        LPF = sig.iirdesign(125, 150, 0.01, 160, output='sos', fs=self.fsamp)
+
+        # get arrays of the raw time series
+        qpd_x,qpd_y,qpd_z = tuple(self.quad_raw_data)
+        qpd_n = self.quad_null
+        xypd_x,xypd_y,_ = tuple(self.xypd_raw_data)
+        accel_x,accel_y,accel_z = tuple(self.accelerometer)
+        cant_x,cant_y,cant_z = tuple(self.cant_raw_data)
+
+        # detrend the data
+        qpd_x -= np.mean(qpd_x)
+        qpd_y -= np.mean(qpd_y)
+        qpd_z -= np.mean(qpd_z)
+        qpd_n -= np.mean(qpd_n)
+        xypd_x -= np.mean(xypd_x)
+        xypd_y -= np.mean(xypd_y)
+        accel_x -= np.mean(accel_x)
+        accel_y -= np.mean(accel_y)
+        accel_z -= np.mean(accel_z)
+        mean_cant_x = np.mean(cant_x)
+        mean_cant_y = np.mean(cant_y)
+        mean_cant_z = np.mean(cant_z)
+
+        # downsample the data prior to applying the Wiener filter
+        qpd_x_lpf = gv_decimate(qpd_x, ds_factor, LPF)
+        qpd_y_lpf = gv_decimate(qpd_y, ds_factor, LPF)
+        qpd_z_lpf = gv_decimate(qpd_z, ds_factor, LPF)
+        qpd_n_lpf = gv_decimate(qpd_n, ds_factor, LPF)
+        xypd_x_lpf = gv_decimate(xypd_x,ds_factor, LPF)
+        xypd_y_lpf = gv_decimate(xypd_y, ds_factor, LPF)
+        cant_x_lpf = gv_decimate(cant_x-mean_cant_x, ds_factor, LPF) + mean_cant_x
+        cant_y_lpf = gv_decimate(cant_y-mean_cant_y, ds_factor, LPF) + mean_cant_y
+        cant_z_lpf = gv_decimate(cant_z-mean_cant_z, ds_factor, LPF) + mean_cant_z
+        laser_power = gv_decimate(self.laser_power_full - self.mean_laser_power, ds_factor, LPF) + self.mean_laser_power
+        p_trans = gv_decimate(self.p_trans_full-self.mean_p_trans, ds_factor, LPF) + self.mean_p_trans
+        times = self.times[::ds_factor]
+
+        accel_x_lpf = gv_decimate(accel_x, ds_factor, LPF)
+        accel_y_lpf = gv_decimate(accel_y, ds_factor, LPF)
+        accel_z_lpf = gv_decimate(accel_z, ds_factor, LPF)
+        accel_lpf = [accel_x_lpf,accel_y_lpf,accel_z_lpf]
+
+        # apply the Wiener filter in the time domain
+        # included for backwards compatibility, but the preferred method is to do the filtering at a later
+        # step in the frequency domain
+        if time_domain:
+            preds = self.filter_time_domain(wiener=wiener, accel_lpf=accel_lpf)
+        else:
+            preds = np.zeros(5)
+
+        # subtract off the coherent noise
+        qpd_x_w = qpd_x_lpf - preds[0]
+        qpd_y_w = qpd_y_lpf - preds[1]
+        qpd_z_w = qpd_z_lpf - preds[2]
+        xypd_x_w = xypd_x_lpf - preds[3]
+        xypd_y_w = xypd_y_lpf - preds[4]
+
+        # window the data to remove transient artifacts from filtering
+        # but not the cantilever data as force(window(cant_position))=/=window(force(cant_position))
+        win = sig.get_window(('tukey',0.05), len(qpd_x_w))
+        self.window_s1 = np.sum(win)
+        self.window_s2 = np.sum(win**2)
+        qpd_x_w *= win
+        qpd_y_w *= win
+        qpd_z_w *= win
+        qpd_n_w = qpd_n_lpf*win
+        xypd_x_w *= win
+        xypd_y_w *= win
+        accel_lpf *= win
+
+        # replace existing class attributes with filtered data
+        self.quad_raw_data = np.array((qpd_x_w, qpd_y_w, qpd_z_w))
+        self.quad_null = qpd_n_w
+        self.xypd_raw_data = np.array((xypd_x_w, xypd_y_w, qpd_z_w))
+        self.accelerometer = accel_lpf
+        self.cant_raw_data = np.array((cant_x_lpf,cant_y_lpf,cant_z_lpf))
+        self.laser_power_full = laser_power
+        self.p_trans_full = p_trans
+        self.times = times
+
+        # reset the frequency, number of samples, sampling frequency, and window attributes
+        self.freqs = np.fft.rfftfreq(len(qpd_x_lpf),ds_factor/self.fsamp)
+        self.nsamp = len(qpd_x_lpf)
+        self.fsamp = self.fsamp/ds_factor
+        self.window = win
+
+
+    def filter_time_domain(self, wiener, accel_lpf):
+        """Apply the Wiener filters in the time domain.
+
+        :param wiener: a list that specifies which signal streams the noise data should be subtracted from, 
+        defaults to [False, True, False, False, False]
+        :type wiener: list of bools, optional
+        :param accel_lpf: low-pass filtered accelerometer data
+        :type accel_lpf: list of numpy.ndarray
+        :return: numpy.ndarray of filtered data
+        """        
         try:
             # load the pre-trained filters for this data
             with h5py.File('/data/new_trap_processed/calibrations/data_processing_filters/' +\
@@ -437,50 +541,8 @@ class FileData:
             self.error_log = 'No filters found for ' + self.file_name + \
                              '. Wiener filtering not applied to this dataset.'
 
-        # design a low pass filter for downsampling
-        LPF = sig.iirdesign(125, 150, 0.01, 160, output='sos', fs=self.fsamp)
-
-        # get arrays of the raw time series
-        qpd_x,qpd_y,qpd_z = tuple(self.quad_raw_data)
-        qpd_n = self.quad_null
-        xypd_x,xypd_y,_ = tuple(self.xypd_raw_data)
-        accel_x,accel_y,accel_z = tuple(self.accelerometer)
-        cant_x,cant_y,cant_z = tuple(self.cant_raw_data)
-
-        # detrend the data
-        qpd_x -= np.mean(qpd_x)
-        qpd_y -= np.mean(qpd_y)
-        qpd_z -= np.mean(qpd_z)
-        qpd_n -= np.mean(qpd_n)
-        xypd_x -= np.mean(xypd_x)
-        xypd_y -= np.mean(xypd_y)
-        accel_x -= np.mean(accel_x)
-        accel_y -= np.mean(accel_y)
-        accel_z -= np.mean(accel_z)
-        mean_cant_x = np.mean(cant_x)
-        mean_cant_y = np.mean(cant_y)
-        mean_cant_z = np.mean(cant_z)
-
-        # downsample the data prior to applying the Wiener filter
-        qpd_x_lpf = gv_decimate(qpd_x, ds_factor, LPF)
-        qpd_y_lpf = gv_decimate(qpd_y, ds_factor, LPF)
-        qpd_z_lpf = gv_decimate(qpd_z, ds_factor, LPF)
-        qpd_n_lpf = gv_decimate(qpd_n, ds_factor, LPF)
-        xypd_x_lpf = gv_decimate(xypd_x,ds_factor, LPF)
-        xypd_y_lpf = gv_decimate(xypd_y, ds_factor, LPF)
-        accel_x_lpf = gv_decimate(accel_x, ds_factor, LPF)
-        accel_y_lpf = gv_decimate(accel_y, ds_factor, LPF)
-        accel_z_lpf = gv_decimate(accel_z, ds_factor, LPF)
-        cant_x_lpf = gv_decimate(cant_x-mean_cant_x, ds_factor, LPF) + mean_cant_x
-        cant_y_lpf = gv_decimate(cant_y-mean_cant_y, ds_factor, LPF) + mean_cant_y
-        cant_z_lpf = gv_decimate(cant_z-mean_cant_z, ds_factor, LPF) + mean_cant_z
-        laser_power = gv_decimate(self.laser_power_full - self.mean_laser_power, ds_factor, LPF) + self.mean_laser_power
-        p_trans = gv_decimate(self.p_trans_full-self.mean_p_trans, ds_factor, LPF) + self.mean_p_trans
-        times = self.times[::ds_factor]
-
         # loop through and apply the filter for all sensors specified by the input argument
         preds = []
-        accel_lpf = [accel_x_lpf,accel_y_lpf,accel_z_lpf]
         for i in range(3):
             filters = np.vstack([W_qpd[:,i],W_xypd[:,i]])
             pred = []
@@ -488,56 +550,22 @@ class FileData:
                 if w:
                     pred.append(sig.lfilter(filter, 1.0, accel_lpf[i]))
                 else:
-                    pred.append(np.zeros_like(qpd_x_lpf))
+                    pred.append(np.zeros_like(accel_lpf[i]))
             preds.append(pred)
 
         # sum the predicted cross-coupling from all accelerometer axes for each sensor
         preds = np.sum(np.array(preds),axis=0)
 
-        # subtract off the coherent noise
-        qpd_x_w = qpd_x_lpf - preds[0]
-        qpd_y_w = qpd_y_lpf - preds[1]
-        qpd_z_w = qpd_z_lpf - preds[2]
-        xypd_x_w = xypd_x_lpf - preds[3]
-        xypd_y_w = xypd_y_lpf - preds[4]
-
-        # window the data to remove transient artifacts from filtering
-        # but not the cantilever data as force(window(cant_position))=/=window(force(cant_position))
-        win = sig.get_window(('tukey',0.05), len(qpd_x_w))
-        self.window_s1 = np.sum(win)
-        self.window_s2 = np.sum(win**2)
-        qpd_x_w *= win
-        qpd_y_w *= win
-        qpd_z_w *= win
-        qpd_n_w = qpd_n_lpf*win
-        xypd_x_w *= win
-        xypd_y_w *= win
-        accel_lpf *= win
-
-        # replace existing class attributes with filtered data
-        self.quad_raw_data = np.array((qpd_x_w, qpd_y_w, qpd_z_w))
-        self.quad_null = qpd_n_w
-        self.xypd_raw_data = np.array((xypd_x_w, xypd_y_w, qpd_z_w))
-        self.accelerometer = accel_lpf
-        self.cant_raw_data = np.array((cant_x_lpf,cant_y_lpf,cant_z_lpf))
-        self.laser_power_full = laser_power
-        self.p_trans_full = p_trans
-        self.times = times
-
-        # reset the frequency, number of samples, sampling frequency, and window attributes
-        self.freqs = np.fft.rfftfreq(len(qpd_x_lpf),ds_factor/self.fsamp)
-        self.nsamp = len(qpd_x_lpf)
-        self.fsamp = self.fsamp/ds_factor
-        self.window = win
+        return preds
 
 
     def get_motion_likeness(self,ml_model=None):
         """Option to use a motion-likeness metric to measure/subtract scattered light
-        backrounds. Argument "ml_model" is a function that takes the amps array and
+        backrounds. Argument `ml_model` is a function that takes the `amps` array and
         returns motion likeness in x and y.
 
-        :param ml_model: _description_, defaults to None
-        :type ml_model: _type_, optional
+        :param ml_model: A function which returns the motion-likeness in x and y, defaults to None
+        :type ml_model: callable, optional
         """
 
         _,amps,_ = self.extract_quad()
@@ -555,16 +583,19 @@ class FileData:
 
     def calibrate_bead_response(self,tf_path=None,sensor='QPD',cal_drive_freq=71.0,\
                                 no_tf=False,force_cal_factors=[]):
-        """Apply correction using the transfer function to calibrate the
+        """Applies correction using the transfer function to calibrate the
         x, y, and z responses.
 
-        :param tf_path: _description_, defaults to None
-        :type tf_path: _type_, optional
-        :param sensor: _description_, defaults to 'QPD'
+        :param tf_path: Path to the transfer function data and fits, defaults to None
+        :type tf_path: str, optional
+        :param sensor: Which sensor (QPD or XYPD), defaults to 'QPD'
         :type sensor: str, optional
-        :param cal_drive_freq: _description_, defaults to 71.0
+        :param cal_drive_freq: Frequency to use when determining the counts to force units scaling factor, 
+        defaults to 71.0
         :type cal_drive_freq: float, optional
-        :param force_cal_factors: _description_, defaults to []
+        :param no_ft: Don't apply the transfer function calibration, defaults to False
+        :type no_tf: bool, optional
+        :param force_cal_factors: List of calibration factors for x, y, and z to use if `no_tf` is True, defaults to []
         :type force_cal_factors: list, optional
         """
 
@@ -628,19 +659,19 @@ class FileData:
 
 
     def tf_array_fitted(self,freqs,sensor,tf_path=None,diagonalize_qpd=False):
-        """Get the transfer function array from the hdf5 file containing the fitted poles,
+        """Gets the transfer function array from the HDF5 file containing the fitted poles,
         zeros, and gain from the measured transfer functions along x, y, and z, and returns it.
 
-        :param freqs: _description_
-        :type freqs: _type_
-        :param sensor: _description_
-        :type sensor: _type_
-        :param tf_path: _description_, defaults to None
-        :type tf_path: _type_, optional
-        :param diagonalize_qpd: _description_, defaults to False
+        :param freqs: Frequency array for the transfer functions
+        :type freqs: numpy.ndarray
+        :param sensor: Which sensor to use for the transfer function (QPD or XYPD)
+        :type sensor: str
+        :param tf_path: Path to the file containing the transfer function data and fits, defaults to None
+        :type tf_path: str, optional
+        :param diagonalize_qpd: Calibrate the x and y data streams using the bead eigenmodes, defaults to False
         :type diagonalize_qpd: bool, optional
-        :return: _description_
-        :rtype: _type_
+        :return: Tuple of the transfer function matrix array and the calibration factors
+        :rtype: tuple of numpy.ndarray
         """
 
         # transfer function data should be stored here in a folder named by the date
@@ -674,16 +705,16 @@ class FileData:
     def tf_array_interpolated(self,freqs,tf_path=None,cal_drive_freq=71.,suppress_off_diag=False):
         """Extracts the interpolated transfer function array from a .trans file and returns it.
 
-        :param freqs: _description_
-        :type freqs: _type_
-        :param tf_path: _description_, defaults to None
-        :type tf_path: _type_, optional
-        :param cal_drive_freq: _description_, defaults to 71.
-        :type cal_drive_freq: _type_, optional
-        :param suppress_off_diag: _description_, defaults to False
+        :param freqs: Frequency array for the transfer functions
+        :type freqs: numpy.ndarray
+        :param tf_path: Path to the file containing the transfer function data and fits, defaults to None
+        :type tf_path: str, optional
+        :param cal_drive_freq: Frequency to use when determining the counts to force units scaling factor, defaults to 71.
+        :type cal_drive_freq: float, optional
+        :param suppress_off_diag: Ignore off-diagonal elements in the transfer function matrices, defaults to False
         :type suppress_off_diag: bool, optional
-        :return: _description_
-        :rtype: _type_
+        :return: Tuple of the transfer function matrix array and the calibration factors
+        :rtype: tuple of numpy.ndarray
         """
 
         # this tends to cause a ton of divide by zero errors that are handled later, so
@@ -767,24 +798,23 @@ class FileData:
     
 
     def build_drive_mask(self,cant_fft,freqs,num_harmonics=10,width=0,harms=[],cant_drive_freq=3.0):
-        """Identify the fundamental drive frequency and make an array of harmonics specified
-        by the function arguments, then make a notch mask of the width specified around these harmonics.
-        *** Not clear that the width will ever be used, so it may be removed ***
+        """Identifies the fundamental drive frequency and makes an array of harmonics specified
+        by the function arguments, then makes a notch mask of the width specified around these harmonics.
 
-        :param cant_fft: _description_
-        :type cant_fft: _type_
-        :param freqs: _description_
-        :type freqs: _type_
-        :param num_harmonics: _description_, defaults to 10
+        :param cant_fft: The Fourier transform of the cantilever position data
+        :type cant_fft: numpy.ndarray
+        :param freqs: Frequency array for the cantilever data
+        :type freqs: numpy.ndarray
+        :param num_harmonics: Number of harmonics of the drive to use, defaults to 10
         :type num_harmonics: int, optional
-        :param width: _description_, defaults to 0
+        :param width: Width of the notch mask, defaults to 0
         :type width: int, optional
-        :param harms: _description_, defaults to []
+        :param harms: Which of the drive harmonics to include, defaults to []
         :type harms: list, optional
-        :param cant_drive_freq: _description_, defaults to 3.0
+        :param cant_drive_freq: Frequency of the cantilever, defaults to 3.0
         :type cant_drive_freq: float, optional
-        :return: _description_
-        :rtype: _type_
+        :return: Tuple of the drive mask and the index of the fundamental frequency
+        :rtype: tuple
         """
 
         # find the drive frequency, ignoring the DC bin
@@ -826,17 +856,18 @@ class FileData:
 
 
     def get_boolean_cant_mask(self,num_harmonics=10,harms=[],width=0,cant_harms=5,cant_drive_freq=3.0):
-        """Build a boolean mask of a given width for the cantilever drive for the specified harnonics
+        """Builds a boolean mask of a given width for the cantilever drive for the specified harmonics
 
-        :param num_harmonics: _description_, defaults to 10
+        :param num_harmonics: Number of harmonics of the drive to use, defaults to 10
         :type num_harmonics: int, optional
-        :param harms: _description_, defaults to []
+        :param harms: Which of the drive harmonics to use, defaults to []
         :type harms: list, optional
-        :param width: _description_, defaults to 0
+        :param width: Width of the mask, defaults to 0
         :type width: int, optional
-        :param cant_harms: _description_, defaults to 5
+        :param cant_harms: Number of harmonics of the cantilever drive to use when reconstructing the cantilever position 
+        time series, defaults to 5
         :type cant_harms: int, optional
-        :param cant_drive_freq: _description_, defaults to 3.0
+        :param cant_drive_freq: Drive frequency of the cantilever, defaults to 3.0
         :type cant_drive_freq: float, optional
         """
 
@@ -883,7 +914,7 @@ class FileData:
         """Get the fft of the x, y, and z data at each of the harmonics and
         some side-band frequencies.
 
-        :param noise_bins: _description_, defaults to 10
+        :param noise_bins: Number of bins to use when computing the sideband noise, defaults to 10
         :type noise_bins: int, optional
         """
         
@@ -960,15 +991,15 @@ class FileData:
         written to be applicable to a generic model, but for now will only be used
         for the Yukawa-modified gravity model in which the only parameter is lambda.
 
-        :param signal_model: _description_
-        :type signal_model: _type_
-        :param p0_bead: _description_
-        :type p0_bead: _type_
-        :param mass_bead: _description_, defaults to 0
+        :param signal_model: The signal model to be tested
+        :type signal_model: optlevanalysis.signals.SignalModel
+        :param p0_bead: List containing the position of the bead in the same coordinate system as the attractor
+        :type p0_bead: list of float
+        :param mass_bead: Mass of the bead in picograms. If not given the mass is computed from the density and radius, defaults to 0
         :type mass_bead: int, optional
-        :param cant_vec: _description_, defaults to None
-        :type cant_vec: _type_, optional
-        :param num_harms: _description_, defaults to 10
+        :param cant_vec: Cantilever position vector, defaults to None
+        :type cant_vec: list, optional
+        :param num_harms: Number of harmonics of the drive to use, defaults to 10
         :type num_harms: int, optional
         """
 
@@ -1036,7 +1067,7 @@ class AggregateData:
     """_summary_
     """
 
-    def __init__(self,data_dirs=[],file_prefixes=[],descrips=[],num_to_load=1e6,\
+    def __init__(self,data_dirs=[],file_prefixes=[],descrips=[],num_to_load=1000000,\
                  first_index=0,configs=None):
         """Takes a list of directories containing the files to be aggregated, and optionally
         a list of file prefixes. If given, the list of file prefixes should be the same length as
@@ -1044,20 +1075,21 @@ class AggregateData:
         directory, add the directory to the list multiple times with the corresponding prefixes
         in the file_prefixes argument.
 
-        :param data_dirs: _description_, defaults to []
-        :type data_dirs: list, optional
-        :param file_prefixes: _description_, defaults to []
+        :param data_dirs: Directory or directories containing the datasets to be included, defaults to []
+        :type data_dirs: str or list, optional
+        :param file_prefixes: File prefix or prefixes corresponding to the included datasets, defaults to []
         :type file_prefixes: list, optional
-        :param descrips: _description_, defaults to []
+        :param descrips: Description to use to identify the different datasets, defaults to []
         :type descrips: list, optional
-        :param num_to_load: _description_, defaults to 1e6
-        :type num_to_load: _type_, optional
-        :param configs: _description_, defaults to None
-        :type configs: _type_, optional
-        :raises Exception: _description_
-        :raises Exception: _description_
-        :raises Exception: _description_
-        :raises Exception: _description_
+        :param num_to_load: Number of files to load from each dataset, defaults to 1000000
+        :type num_to_load: int, optional
+        :param configs: List of config dictionaries to use instead of the config file in each dataset 
+        directory, defaults to None
+        :type configs: list of dict, optional
+        :raises Exception: If the length of data_dirs and file_prefixes do not match
+        :raises Exception: If the length of data_dirs and descrips do not match
+        :raises Exception: If the length of data_dirs and num_to_load do not match
+        :raises Exception: If the length of data_dirs and configs do not match
         """
         if isinstance(data_dirs,str):
             data_dirs = [data_dirs]
@@ -1115,12 +1147,12 @@ class AggregateData:
 
 
     def __get_file_list(self,no_config=False):
-        """Get a list of all file paths given the directories and prefixes specified
-        when the object was created and set it as an object attribute.
+        """Gets a list of all file paths given the directories and prefixes specified
+        when the object was created and sets it as an object attribute.
 
-        :param no_config: _description_, defaults to False
+        :param no_config: If true, do not look for a config file, defaults to False
         :type no_config: bool, optional
-        :raises Exception: _description_
+        :raises Exception: If a config file is not found in the directory and no_config is False
         """
         file_list = []
         num_files = []
@@ -1180,31 +1212,33 @@ class AggregateData:
         self.__bin_by_config_data()
 
 
-    def load_file_data(self,num_cores=1,diagonalize_qpd=False,load_templates=False,harms=[],\
+    def load_file_data(self,num_cores=30,diagonalize_qpd=False,load_templates=False,harms=[],\
                        max_freq=500.,downsample=True,wiener=[False,True,False,False,False],\
-                       no_tf=False,force_cal_factors=[],no_config=False,ml_model=None,lightweight=True):
-        """Create a FileData object for each of the files in the file list and load
+                       time_domain=False,no_tf=False,force_cal_factors=[],no_config=False,\
+                       ml_model=None,lightweight=True):
+        """Creates a FileData object for each of the files in the file list and loads
         in the relevant data for physics analysis.
 
-        :param num_cores: _description_, defaults to 1
+        :param num_cores: Number of CPU cores to use when loading the data, defaults to 30
         :type num_cores: int, optional
-        :param diagonalize_qpd: _description_, defaults to False
+        :param diagonalize_qpd: Calibrate the x and y data streams using the bead eigenmodes, defaults to False
         :type diagonalize_qpd: bool, optional
-        :param load_templates: _description_, defaults to False
+        :param load_templates: Load signal templates, defaults to False
         :type load_templates: bool, optional
-        :param harms: _description_, defaults to []
+        :param harms: Which harmonics of the drive to use, defaults to []
         :type harms: list, optional
-        :param downsample: _description_, defaults to True
+        :param downsample: Downsample the data, defaults to True
         :type downsample: bool, optional
-        :param wiener: _description_, defaults to [False,True,False,False,False]
+        :param wiener: Apply Wiener filter noise subtraction to the QPD x, y, and z and XYPD x and y data streams, 
+        defaults to [False,True,False,False,False]
         :type wiener: list, optional
-        :param force_cal_factors: _description_, defaults to []
+        :param force_cal_factors: Calibration factors to use if transfer function correction is not applied, defaults to []
         :type force_cal_factors: list, optional
-        :param no_config: _description_, defaults to False
+        :param no_config: Whether to look for a config file in the data directories, defaults to False
         :type no_config: bool, optional
-        :param ml_model: _description_, defaults to None
-        :type ml_model: _type_, optional
-        :param lightweight: _description_, defaults to True
+        :param ml_model: Motion-likeness model to apply to the x and y data, defaults to None
+        :type ml_model: callable, optional
+        :param lightweight: Drop the raw data that is not typically used in the analysis after loading, defaults to True
         :type lightweight: bool, optional
         """
         if load_templates:
@@ -1227,7 +1261,7 @@ class AggregateData:
                                                     (file_path,qpd_diag_mats[self.bin_indices[i,4]],\
                                                      signal_models[self.bin_indices[i,0]],ml_model,\
                                                      self.p0_bead[self.bin_indices[i,2]],self.mass_bead[self.bin_indices[i,1]],\
-                                                     harms,max_freq,downsample,wiener,no_tf,force_cal_factors,lightweight) \
+                                                     harms,max_freq,downsample,wiener,time_domain,no_tf,force_cal_factors,lightweight) \
                                                      for i,file_path in enumerate(tqdm(self.file_list)))
         # record which files are bad and save the error logs
         error_logs = []
@@ -1269,12 +1303,12 @@ class AggregateData:
 
 
     def load_yukawa_model(self,lambda_range=[1e-6,1e-4],num_lambdas=None):
-        """Load functions used to make Yukawa-modified gravity templates
+        """Loads functions used to make Yukawa-modified gravity templates
 
-        :param lambda_range: _description_, defaults to [1e-6,1e-4]
+        :param lambda_range: Range of lambda values in meters, defaults to [1e-6,1e-4]
         :type lambda_range: list, optional
-        :param num_lambdas: _description_, defaults to None
-        :type num_lambdas: _type_, optional
+        :param num_lambdas: Number of lambda values to use, defaults to None
+        :type num_lambdas: int, optional
         """
         self.__get_file_list()
         signal_models = []
@@ -1292,40 +1326,44 @@ class AggregateData:
         
 
     def process_file(self,file_path,qpd_diag_mat=None,signal_model=None,ml_model=None,p0_bead=None,\
-                     mass_bead=0,harms=[],max_freq=500.,downsample=True,wiener=[False,True,False,False,False],\
-                     no_tf=False,force_cal_factors=[],lightweight=True):
-        """Process data for an individual file and return the FileData object.
+                     mass_bead=0,harms=[],max_freq=2500.,downsample=True,wiener=[False,True,False,False,False],\
+                     time_domain=False,no_tf=False,force_cal_factors=[],lightweight=True):
+        """Processes data for an individual file and returns the FileData object.
 
-        :param file_path: _description_
-        :type file_path: _type_
-        :param qpd_diag_mat: _description_, defaults to None
-        :type qpd_diag_mat: _type_, optional
-        :param signal_model: _description_, defaults to None
-        :type signal_model: _type_, optional
-        :param ml_model: _description_, defaults to None
-        :type ml_model: _type_, optional
-        :param p0_bead: _description_, defaults to None
-        :type p0_bead: _type_, optional
-        :param harms: _description_, defaults to []
+        :param file_path: Path to the raw HDF5 file to be loaded
+        :type file_path: str
+        :param qpd_diag_mat: Matrix used to transform QPD quadrants into x and y motion, defaults to None
+        :type qpd_diag_mat: numpy.ndarray, optional
+        :param signal_model: Signal model to be tested, defaults to None
+        :type signal_model: SignalModel, optional
+        :param ml_model: Motion-likeness model to be applied to the QPD x and y data, defaults to None
+        :type ml_model: callable, optional
+        :param p0_bead: Position of the bead, defaults to None
+        :type p0_bead: list, optional
+        :param harms: Harmonics of the cantilever drive to use, defaults to []
         :type harms: list, optional
-        :param max_freq: _description_, defaults to 500.
-        :type max_freq: _type_, optional
-        :param downsample: _description_, defaults to True
+        :param max_freq: The maximum frequency to keep in the data, defaults to 2500. 
+        :type max_freq: float, optional
+        :param downsample: Downsample the data, defaults to True
         :type downsample: bool, optional
-        :param wiener: _description_, defaults to [False,True,False,False,False]
-        :type wiener: list, optional
-        :param force_cal_factors: _description_, defaults to []
+        :param wiener: a list that specifies which signal streams the noise data should be subtracted from, 
+        defaults to [False, True, False, False, False]
+        :type wiener: list of bools, optional
+        :param no_tf: Don't apply the transfer function calibration, defaults to False
+        :type no_tf: bool, optional
+        :param force_cal_factors: List of calibration factors for x, y, and z to use if `no_tf` is True, defaults to []
         :type force_cal_factors: list, optional
-        :param lightweight: _description_, defaults to True
+        :param lightweight: Drop some data after loading, defaults to False
         :type lightweight: bool, optional
-        :return: _description_
-        :rtype: _type_
+        :return: The FileData object containing the processed data
+        :rtype: optlevanalysis.data_processing.FileData
         """
         this_file = FileData(file_path)
         try:
             this_file.load_data(qpd_diag_mat=qpd_diag_mat,signal_model=signal_model,ml_model=ml_model,\
                                 p0_bead=p0_bead,mass_bead=mass_bead,harms=harms,downsample=downsample,wiener=wiener,\
-                                max_freq=max_freq,no_tf=no_tf,force_cal_factors=force_cal_factors,lightweight=lightweight)
+                                time_domain=time_domain,max_freq=max_freq,no_tf=no_tf,force_cal_factors=force_cal_factors,\
+                                lightweight=lightweight)
         except Exception as e:
             this_file.is_bad = True
             this_file.error_log = repr(e)
@@ -1333,10 +1371,10 @@ class AggregateData:
     
 
     def __build_dict(self,lightweight=True):
-        """Build a dict containing the relevant data from each FileData object to
+        """Builds a dict containing the relevant data from each FileData object to
         make indexing the data easier.
 
-        :param lightweight: _description_, defaults to True
+        :param lightweight: Drop some data after loading, defaults to False
         :type lightweight: bool, optional
         """
 
@@ -1483,7 +1521,7 @@ class AggregateData:
 
 
     def __bin_by_config_data(self):
-        """Match the data from the config file (p0_bead, diam_bead) to the data by assigning the index
+        """Matches the data from the config file (p0_bead, diam_bead) to the data by assigning the index
         of the correct value in the p0_bead and diam_bead arrays. Should be called automatically when
         files are first loaded, but never by the user.
         """
@@ -1569,7 +1607,7 @@ class AggregateData:
 
 
     def __purge_bad_files(self):
-        """Make a list of the file names that couldn't be loaded, then remove the FileData objects
+        """Makes a list of the file names that couldn't be loaded, then removes the FileData objects
         and other relevant object attributes.
         """
         bad_file_indices = np.copy(self.bin_indices[:,-1]).astype(bool)
@@ -1584,11 +1622,11 @@ class AggregateData:
         a file falls.
         bin_widths = [x_width_microns, z_width_microns]
 
-        :param cant_bin_widths: _description_, defaults to [1.,1.]
+        :param cant_bin_widths: Width of the bins of cantilever position data in x and y in microns, defaults to [1.,1.]
         :type cant_bin_widths: list, optional
-        :param accel_thresh: _description_, defaults to 0.1
+        :param accel_thresh: Accelerometer threshold above which a file is discarded, defaults to 0.1
         :type accel_thresh: float, optional
-        :param bias_bins: _description_, defaults to 0
+        :param bias_bins: Number of attractor bias bins to use. Currently not implemented, defaults to 0
         :type bias_bins: int, optional
         """
         print('Binning data by mean cantilever position and accelerometer data...')
@@ -1667,8 +1705,8 @@ class AggregateData:
         """Returns arrays of the config data and auxiliary data for use in indexing files within the
         AggregateData object. This should be updated as more bins are added to bin_indices.
 
-        :return: _description_
-        :rtype: _type_
+        :return: The arrays of parameters with the same length as the number of files in the object
+        :rtype: tuple of numpy.ndarray
         """
 
         # define all parameters to be returned here
@@ -1693,26 +1731,25 @@ class AggregateData:
         """Returns a single list of indices corresponding to the positions of files that pass the
         cuts given by the index array.
 
-        :param diam_bead: _description_, defaults to -1.
-        :type diam_bead: _type_, optional
-        :param descrip: _description_, defaults to ''
+        :param diam_bead: Bead diameter in microns. All diameters are accepted if not given, defaults to -1.
+        :type diam_bead: float, optional
+        :param descrip: Description assigned to datasets when loaded, defaults to ''
         :type descrip: str, optional
-        :param cant_x: _description_, defaults to [-1e4,1e4]
+        :param cant_x: Cantilever x position range in microns, defaults to [-1e4,1e4]
         :type cant_x: list, optional
-        :param cant_z: _description_, defaults to [-1e4,1e4]
+        :param cant_z: Cantilever z position range in microns, defaults to [-1e4,1e4]
         :type cant_z: list, optional
-        :param accel_veto: _description_, defaults to False
+        :param accel_veto: Whether to veto based on accelerometer readings, defaults to False
         :type accel_veto: bool, optional
-        :raises Exception: _description_
-        :raises Exception: _description_
-        :raises Exception: _description_
-        :raises Exception: _description_
-        :raises Exception: _description_
-        :raises Exception: _description_
-        :raises Exception: _description_
-        :raises Exception: _description_
-        :return: _description_
-        :rtype: _type_
+        :raises Exception: If no data is found for the bead diameter specified
+        :raises Exception: If no data is found for the description specified
+        :raises Exception: If the cantilever x position range is not given in the correct format
+        :raises Exception: If no bins are found for the given range of cantilever x position
+        :raises Exception: If the cantilever z position range is not given in the correct format
+        :raises Exception: If no bins are found for the given range of cantilever z position
+        :raises Exception: If no data are found matching the specified cuts
+        :return: The list of indices corresponding to the files that pass the cuts
+        :rtype: list
         """
         # p0_bead shoudln't need to be specified since it can be identified by descrips if necessary
         # same with mass_bead
@@ -1781,9 +1818,9 @@ class AggregateData:
         else:
             bad_format = True
         if bad_format:
-            raise Exception('Error: cantilever x position range must be given in the format [lower, upper]!')
+            raise Exception('Error: cantilever z position range must be given in the format [lower, upper]!')
         if not len(cant_z_inds):
-            raise Exception('Error: no bins found for the given range of cantilever x position!')
+            raise Exception('Error: no bins found for the given range of cantilever z position!')
         
         if accel_veto:
             accel_inds = [0]
@@ -1819,7 +1856,7 @@ class AggregateData:
     
 
     def estimate_spectral_densities(self):
-        """Compute the amplitude spectral density for each axis and sensor, averaging over datasets
+        """Computes the amplitude spectral density for each axis and sensor, averaging over datasets
         with the same conditions as defined by bin_indices.
         """
 
@@ -1864,20 +1901,23 @@ class AggregateData:
         print('Amplitude spectral densities estimated for {} sets of run conditions.'.format(self.qpd_asds.shape[0]))
 
 
-    def subtract_coherent_noise(self, acc_channels=[2]):
-        """Subtract noise measured in the accelerometer from the QPD data streams, down to the
-        coherence limit. This should only be called if the "wiener" argument was set to False
+    def subtract_coherent_noise(self, file_inds=None, acc_channels=[2], plot=False):
+        """Subtracts noise measured in the accelerometer from the QPD data streams, down to the
+        coherence limit. This should only be called if the `wiener` argument was set to False
         for all channels when the data was loaded.
         """
 
         print('Subtracting coherent portion of accelerometer noise from QPD data...')
 
-        if self.noise_subtracted:
-            print('Error: coherent noise already subtracted from the QPD data!')
-            return
+        # if self.noise_subtracted:
+        #     print('Error: coherent noise already subtracted from the QPD data!')
+        #     return
+        
+        if file_inds is None:
+            file_inds = list(range(self.bin_indices.shape[0]))
         
         # get the accelerometer data and take the DFT
-        accels = self.agg_dict['accelerometer']
+        accels = self.agg_dict['accelerometer'][file_inds]
         if np.all(accels==0):
             print('Error: no accelerometer data found!')
             return
@@ -1886,7 +1926,7 @@ class AggregateData:
         accel_ffts = np.fft.rfft(win[np.newaxis,np.newaxis,:]*accels,axis=-1)[:,:,:len(self.agg_dict['freqs'])]
 
         # ffts already calibrated and scaled to the correct units
-        qpd_ffts = self.agg_dict['qpd_ffts_full']
+        qpd_ffts = self.agg_dict['qpd_ffts_full'][file_inds]
         qpd_data = np.fft.irfft(qpd_ffts, accels.shape[-1], axis=-1)[:,:3,:]
         qpd_null = np.fft.irfft(qpd_ffts, accels.shape[-1], axis=-1)[:,3,:]
 
@@ -1900,6 +1940,7 @@ class AggregateData:
         for i in range(3):
             if i not in acc_channels:
                 continue
+            print('Subtracting noise from accelerometer channel {}...'.format(i))
             # estimate the cross spectral density between the accelerometer and each QPD channel using all datasets
             _, pxa = sig.csd(qpd_data[:,0,:].flatten(),accels[:,i,:].flatten(),fs=self.agg_dict['fsamp'],\
                              window=win,nperseg=accels.shape[-1],noverlap=None)
@@ -1922,17 +1963,18 @@ class AggregateData:
             tf_z = pza/paa
             tf_n = pna/paa
 
-            fig, ax = plt.subplots(2, figsize=(7,9), sharex=True)
-            ax[0].loglog(_, np.abs(tf_z), lw=1)
-            ax[1].plot(_, np.angle(tf_z)*180./np.pi, lw=1, ls='none', marker='o', ms=2, fillstyle='none')
-            ax[0].set_xlim([0,500])
-            ax[1].set_ylim([-180,180])
-            ax[0].grid(which='both')
-            ax[1].grid(which='both')
-            ax[1].set_xlabel('Frequency [Hz]')
-            ax[0].set_ylabel('Magnitude [$z$ counts/$a$ count]')
-            ax[1].set_ylabel('Phase [$^\circ$]')
-            fig.suptitle('Transfer function from accelerometer ${}$ to QPD $z$'.format(['x', 'y', 'z'][i]))
+            if plot:
+                fig, ax = plt.subplots(2, figsize=(7,9), sharex=True)
+                ax[0].loglog(_, np.abs(tf_z), lw=1)
+                ax[1].plot(_, np.angle(tf_z)*180./np.pi, lw=1, ls='none', marker='o', ms=2, fillstyle='none')
+                ax[0].set_xlim([0,500])
+                ax[1].set_ylim([-180,180])
+                ax[0].grid(which='both')
+                ax[1].grid(which='both')
+                ax[1].set_xlabel('Frequency [Hz]')
+                ax[0].set_ylabel('Magnitude [$z$ counts/$a$ count]')
+                ax[1].set_ylabel('Phase [$^\circ$]')
+                fig.suptitle('Transfer function from accelerometer ${}$ to QPD $z$'.format(['x', 'y', 'z'][i]))
 
             # subtract off the coherent noise from the ffts
             qpd_ffts_x -= tf_x[np.newaxis,:len(self.agg_dict['freqs'])]*accel_ffts[:,i,:]
@@ -1945,8 +1987,8 @@ class AggregateData:
         qpd_ffts[:,1,:] = qpd_ffts_y
         qpd_ffts[:,2,:] = qpd_ffts_z
         qpd_ffts[:,3,:] = qpd_ffts_n
-        self.agg_dict['qpds_ffts_full'] = qpd_ffts
-        self.agg_dict['qpd_ffts'] = qpd_ffts[:,:,self.agg_dict['good_inds']]
+        self.agg_dict['qpd_ffts_full'][file_inds] = qpd_ffts
+        self.agg_dict['qpd_ffts'][file_inds] = qpd_ffts[:,:,self.agg_dict['good_inds']]
 
         # change the flag to indicate that coherent noise has been subtracted
         self.noise_subtracted = True
@@ -1965,20 +2007,20 @@ class AggregateData:
 
 
     def diagonalize_qpd(self,fit_inds=None,peak_guess=[400.,370.],width_guess=[10.,10.],plot=False):
-        """Fit the two resonant peaks in x and y and diagonalize the QPD position sensing
+        """Fits the two resonant peaks in x and y and diagonalizes the QPD position sensing
         to remove cross-coupling from one into the other. Returns a matrix that can be used
         by the FileData class to extract x and y from the raw data.
 
-        :param fit_inds: _description_, defaults to None
-        :type fit_inds: _type_, optional
-        :param peak_guess: _description_, defaults to [400.,370.]
+        :param fit_inds: Indices of the files to use for the fit, defaults to None
+        :type fit_inds: numpy.ndarray , optional
+        :param peak_guess: Estimate of the resonant frequencies in x and y in Hz, defaults to [400.,370.]
         :type peak_guess: list, optional
-        :param width_guess: _description_, defaults to [10.,10.]
+        :param width_guess: Estimates of the resonant peak widths in x and y in Hz, defaults to [10.,10.]
         :type width_guess: list, optional
-        :param plot: _description_, defaults to False
+        :param plot: Whether to plot the result, defaults to False
         :type plot: bool, optional
-        :return: _description_
-        :rtype: _type_
+        :return: Matrix that can be used to diagonalize the position sensing data
+        :rtype: numpy.ndarray
         """
 
         # if no argument is provided, just use all the files
@@ -2143,12 +2185,12 @@ class AggregateData:
 
 
     def merge_objects(self,object_list):
-        """Merge two AggregateData objects. First create a new object with no input arguments,
+        """Merges two AggregateData objects. First create a new object with no input arguments,
         then immediately call this function, passing in a list of the objects to be merged.
         The binning should then be done again to ensure the indices are set correctlly.
 
-        :param object_list: _description_
-        :type object_list: _type_
+        :param object_list: List of AggregateData objects to merge
+        :type object_list: list
         """
         print('Merging {} objects...'.format(len(object_list)))
 
@@ -2255,9 +2297,9 @@ class AggregateData:
 
 
     def save_to_hdf5(self,path=''):
-        """Save the data in the AggregateData object to an hdf5 file.
+        """Saves the data in the AggregateData object to an HDF5 file.
 
-        :param path: _description_, defaults to ''
+        :param path: Path to the HDF5 file where the AggregateData object should be saved, defaults to ''
         :type path: str, optional
         """
         print('Saving AggregateData object...')
@@ -2271,7 +2313,7 @@ class AggregateData:
             os.makedirs('/'.join(path.split('/')[:-1]))
 
         if len(self.file_data_objs):
-            print('Warning: FileData objects cannot be saved to hdf5. Only saving AggregateData attributes.')
+            print('Warning: FileData objects cannot be saved to HDF5. Only saving AggregateData attributes.')
         
         with h5py.File(path, 'w') as f:
             # add the commit hash, creation date, and user as attributes
@@ -2302,10 +2344,10 @@ class AggregateData:
 
 
     def load_from_hdf5(self,path):
-        """Load the AggregateData object from an hdf5 file.
+        """Loads the AggregateData object from an HDF5 file.
 
-        :param path: _description_
-        :type path: _type_
+        :param path: Path to the HDF5 file to be loaded
+        :type path: str
         """
         print('Loading AggregateData object...')
 
