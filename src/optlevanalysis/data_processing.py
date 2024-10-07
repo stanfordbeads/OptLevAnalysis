@@ -55,6 +55,7 @@ class FileData:
         self.date = ''
         self.times = np.array(())
         self.accelerometer = np.array(())
+        self.microphone = np.array(())
         self.fsamp = 0
         self.nsamp = 0
         self.window_s1 = 0
@@ -139,6 +140,7 @@ class FileData:
         self.read_hdf5()
         self.fsamp = self.data_dict['fsamp']
         self.accelerometer = self.data_dict['accelerometer']
+        self.microphone = self.data_dict['microphone']
         self.bead_height = self.data_dict['bead_height']
         self.camera_status = self.data_dict['camera_status']
         self.get_laser_power()
@@ -155,11 +157,12 @@ class FileData:
         freqs = np.fft.rfftfreq(self.nsamp, d=1.0/self.fsamp)
         self.freqs = freqs[freqs<=max_freq]
         if downsample:
-            self.filter_raw_data(wiener, time_domain)
+            self.downsample_raw_data(wiener, time_domain)
         self.calibrate_stage_position()
         self.calibrate_bead_response(tf_path=tf_path,sensor='QPD',cal_drive_freq=cal_drive_freq,no_tf=no_tf,\
-                                     force_cal_factors=force_cal_factors)
-        self.calibrate_bead_response(tf_path=tf_path,sensor='XYPD',cal_drive_freq=cal_drive_freq,no_tf=no_tf)
+                                     force_cal_factors=force_cal_factors,time_domain=time_domain,wiener=wiener)
+        self.calibrate_bead_response(tf_path=tf_path,sensor='XYPD',cal_drive_freq=cal_drive_freq,no_tf=no_tf,\
+                                     time_domain=time_domain,wiener=wiener)
         self.xypd_force_calibrated[2,:] = np.copy(self.qpd_force_calibrated[2,:])
         self.get_boolean_cant_mask(num_harmonics=num_harmonics,harms=harms,\
                                    cant_drive_freq=cant_drive_freq,width=width)
@@ -191,7 +194,12 @@ class FileData:
                 if len(name):
                     names[i] = name[0]
 
-            dd['cant_data'] = np.array(f['cant_data'],dtype=np.float64)
+            try:
+                dd['cant_data'] = np.array(f['cant_data'],dtype=np.float64)
+            except:
+                dd['cant_data'] = np.zeros((3, len(f['quad_data'])//12))
+            if np.prod(dd['cant_data'].shape)==0:
+                dd['cant_data'] = np.zeros((3, len(f['quad_data'])//12))
             dd['quad_data'] = np.array(f['quad_data'],dtype=np.float64)
             if names[0] != '':
                 accel = np.array(f[names[0]])
@@ -203,6 +211,10 @@ class FileData:
                     dd['accelerometer'] = accel
             else:
                 dd['accelerometer'] = np.zeros_like(dd['cant_data'])
+            if 'mic1' in these_fields and len(f['mic1']) > 0:
+                dd['microphone'] = np.array(np.array(f['mic1'])[np.newaxis,:])
+            else:
+                dd['microphone'] = np.zeros((1, len(dd['cant_data'][0])))
             if 'laser_power' in these_fields and len(f['laser_power']) > 0:
                 dd['laser_power'] = np.array(f['laser_power'])
             else:
@@ -386,7 +398,7 @@ class FileData:
         self.quad_null = n.astype(np.float64)/quad_sum
 
 
-    def filter_raw_data(self,wiener=[False,True,False,False,False],time_domain=False):
+    def downsample_raw_data(self,wiener=[False,True,False,False,False],time_domain=False):
         """Downsamples the time series for all sensors, then use a pre-trained Wiener filter to subtract
         coherent noise coupling in from the table. Input `wiener` is a list of bools which specifies
         whether to subtract coherent accelerometer z noise from [QPD x, QPD y, z, XYPD x, XYPD y]
@@ -407,6 +419,7 @@ class FileData:
         qpd_n = self.quad_null
         xypd_x,xypd_y,_ = tuple(self.xypd_raw_data)
         accel_x,accel_y,accel_z = tuple(self.accelerometer)
+        mic_1 = self.microphone[0]
         cant_x,cant_y,cant_z = tuple(self.cant_raw_data)
 
         # detrend the data
@@ -419,6 +432,7 @@ class FileData:
         accel_x -= np.mean(accel_x)
         accel_y -= np.mean(accel_y)
         accel_z -= np.mean(accel_z)
+        mic_1 -= np.mean(mic_1)
         mean_cant_x = np.mean(cant_x)
         mean_cant_y = np.mean(cant_y)
         mean_cant_z = np.mean(cant_z)
@@ -440,7 +454,8 @@ class FileData:
         accel_x_lpf = gv_decimate(accel_x, ds_factor, LPF)
         accel_y_lpf = gv_decimate(accel_y, ds_factor, LPF)
         accel_z_lpf = gv_decimate(accel_z, ds_factor, LPF)
-        accel_lpf = [accel_x_lpf,accel_y_lpf,accel_z_lpf]
+        mic_1_lpf = gv_decimate(mic_1, ds_factor, LPF)
+        accel_lpf = [accel_x_lpf, accel_y_lpf, accel_z_lpf]
 
         # apply the Wiener filter in the time domain
         # included for backwards compatibility, but the preferred method is to do the filtering at a later
@@ -469,12 +484,14 @@ class FileData:
         xypd_x_w *= win
         xypd_y_w *= win
         accel_lpf *= win
+        mic_1_lpf *= win
 
         # replace existing class attributes with filtered data
         self.quad_raw_data = np.array((qpd_x_w, qpd_y_w, qpd_z_w))
         self.quad_null = qpd_n_w
         self.xypd_raw_data = np.array((xypd_x_w, xypd_y_w, qpd_z_w))
         self.accelerometer = accel_lpf
+        self.microphone = np.array((mic_1_lpf,))
         self.cant_raw_data = np.array((cant_x_lpf,cant_y_lpf,cant_z_lpf))
         self.laser_power_full = laser_power
         self.p_trans_full = p_trans
@@ -488,7 +505,10 @@ class FileData:
 
 
     def filter_time_domain(self, wiener, accel_lpf):
-        """Apply the Wiener filters in the time domain.
+        """Apply the Wiener filters in the time domain. This function is included to maintain backwards
+        compatibility, but the preferred method is to do the filtering at a later step in the frequency
+        domain. Since the microphone data was not recorded at the time this function was used, only the
+        accelerometer data is used in the filtering.
 
         :param wiener: a list that specifies which signal streams the noise data should be subtracted from, 
         defaults to [False, True, False, False, False]
@@ -500,7 +520,7 @@ class FileData:
         try:
             # load the pre-trained filters for this data
             with h5py.File('/data/new_trap_processed/calibrations/data_processing_filters/' +\
-                            self.date + '/wienerFilters.h5','r') as filter_file:
+                            self.date + '/time_domain/wienerFilters.h5','r') as filter_file:
 
                 # sensor naming conventions have changed, so accept multiple names
                 sensor_name = [s for s in list(filter_file.keys()) if s not in ['QPD', 'LPF']][0]
@@ -582,7 +602,8 @@ class FileData:
 
 
     def calibrate_bead_response(self,tf_path=None,sensor='QPD',cal_drive_freq=71.0,\
-                                no_tf=False,force_cal_factors=[]):
+                                no_tf=False,force_cal_factors=[],time_domain=False,\
+                                wiener=[False,True,False,False,False]):
         """Applies correction using the transfer function to calibrate the
         x, y, and z responses.
 
@@ -633,6 +654,11 @@ class FileData:
         # calculate the DFT of the data, then correct using the transfer function matrix
         data_fft = raw_data - np.mean(raw_data,axis=1,keepdims=True)
         data_fft = np.fft.rfft(raw_data)[:,:len(self.freqs)]
+
+        # apply the wiener filter to the uncalibrated spectra
+        if not time_domain and not all(~np.array(wiener)):
+            data_fft = self.filter_freq_domain(data_fft, sensor=sensor, wiener=wiener)
+
         # matrix multiplication with index contraction made explicit
         # 'kj,ki' = matrix multiplication along second two indices (the 3x3 part)
         # output has one free index (j). '->ji' = output uncontracted indices in this order
@@ -656,6 +682,48 @@ class FileData:
         elif sensor=='XYPD':
             self.xypd_force_calibrated = bead_force_cal
             self.xypd_ffts_full = calibrated_fft*norm_factor
+
+
+    def filter_freq_domain(self, sensor_ffts, sensor='QPD', wiener=[False,True,False,False,False]):
+        """Applies the Wiener filter in the frequency domain.
+
+        :param wiener: a list that specifies which signal streams the noise data should be subtracted from, 
+        defaults to [False, True, False, False, False]
+        :type wiener: list of bools, optional
+        :param accel_lpf: low-pass filtered accelerometer data
+        :type accel_lpf: list of numpy.ndarray
+        """
+
+        witness_channels = ['accel_x', 'accel_y', 'accel_z', 'mic_1']
+
+        # DFTs of the accelerometer and microphone channels
+        accel_ffts = np.fft.rfft(self.accelerometer)
+        mic_ffts = np.fft.rfft(self.microphone)
+        witness_ffts = np.vstack([accel_ffts, mic_ffts])
+        
+        if sensor == 'QPD':
+            sensor_channels = ['qpd_x', 'qpd_y', 'zpd']
+            skip = ~np.array(wiener[0:3])
+        elif sensor == 'XYPD':
+            sensor_channels = ['xypd_x', 'xypd_y']
+            skip = ~np.array(wiener[3:])
+        which_filters = ['filters_shaking', 'filters_noise'][self.is_noise]
+
+        # load the pre-trained filters for this data
+        with h5py.File('/data/new_trap_processed/calibrations/data_processing_filters/freq_domain/' + \
+                       self.file_name.replace('/data/new_trap/','').replace(self.file_name.split('/')[-1],'') + \
+                       '/wienerFilters.h5') as filter_file:
+            for i, chan in enumerate(sensor_channels):
+                if skip[i]: continue
+                # if sensor_channels[i]=='zpd':
+                #     print('filtering z')
+                filters = [filter_file[which_filters][w + '_' + chan] for w in witness_channels]
+                filters = np.array(filters)
+                preds = witness_ffts * filters
+                preds = np.sum(preds, axis=0)
+                sensor_ffts[i] -= preds
+
+        return sensor_ffts
 
 
     def tf_array_fitted(self,freqs,sensor,tf_path=None,diagonalize_qpd=False):
@@ -692,11 +760,11 @@ class FileData:
             # Compute TF at frequencies of interest. Appropriately inverts so we can map response -> drive
             Harr = np.zeros((len(freqs), 3, 3), dtype=complex)
             Harr[:,0,0] = 1/sig.freqs_zpk(tf_file['fits/'+sensor+'/zXX'],tf_file['fits/'+sensor+'/pXX'], \
-                                          tf_file['fits/'+sensor+'/kXX']/tf_file.attrs['scaleFactors_'+sensor][0], 2*np.pi*freqs)[1]
+                                          tf_file['fits/'+sensor+'/kXX']/tf_file.attrs['scaleFactors_'+sensor+suffix][0], 2*np.pi*freqs)[1]
             Harr[:,1,1] = 1/sig.freqs_zpk(tf_file['fits/'+sensor+'/zYY'],tf_file['fits/'+sensor+'/pYY'], \
-                                          tf_file['fits/'+sensor+'/kYY']/tf_file.attrs['scaleFactors_'+sensor][1], 2*np.pi*freqs)[1]
+                                          tf_file['fits/'+sensor+'/kYY']/tf_file.attrs['scaleFactors_'+sensor+suffix][1], 2*np.pi*freqs)[1]
             Harr[:,2,2] = 1/sig.freqs_zpk(tf_file['fits/'+sensor+'/zZZ'],tf_file['fits/'+sensor+'/pZZ'], \
-                                          tf_file['fits/'+sensor+'/kZZ']/tf_file.attrs['scaleFactors_'+sensor][2], 2*np.pi*freqs)[1]
+                                          tf_file['fits/'+sensor+'/kZZ']/tf_file.attrs['scaleFactors_'+sensor+suffix][2], 2*np.pi*freqs)[1]
             force_cal_factors = np.array(tf_file.attrs['scaleFactors_'+sensor+suffix])
 
         return Harr,force_cal_factors
@@ -893,7 +961,7 @@ class FileData:
             else:
                 cant_inds.append(np.argmin(np.abs(self.freqs - (i+1)*self.freqs[fund_ind])))
 
-        # compare the drive amplitude to the noise dataset to determine if this is a noise file
+        # compare the drive amplitude to the noise level to determine if this is a noise file
         noise_inds = np.ones_like(cant_fft)
         noise_inds[cant_inds] = 0
         noise_inds[self.freqs<1] = 0

@@ -25,6 +25,9 @@ def fit_alpha_all_files(agg_dict,file_indices=None,sensor='qpd',use_ml=False,ml_
     if file_indices is None:
         file_indices = np.array(range(agg_dict['times'].shape[0]))
 
+    # compute limits for only the shaking files
+    file_indices = file_indices[~agg_dict['is_noise'][file_indices]]
+
     print('Computing the signal-only likelihood functions for the specified files...')
     likelihood_coeffs = Parallel(n_jobs=num_cores)(delayed(fit_alpha_for_file)\
                                                    (agg_dict,ind,sensor,use_ml,ml_veto)\

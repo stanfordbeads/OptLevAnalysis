@@ -442,6 +442,7 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
 
     if plot_inds is None:
         plot_inds = shaking_inds(agg_dict)
+        plot_inds = np.arange(np.shape(agg_dict['qpd_ffts_full'])[0])
 
     freqs = agg_dict['freqs']
     fsamp = agg_dict['fsamp']
@@ -486,7 +487,7 @@ def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
     
     if which=='roi':
         if ylim is None:
-            ylim = np.array([1e-17,2e-14])*ylim_scale
+            ylim = np.array([1e-18,2e-14])*ylim_scale
         ax.semilogy(freqs,qpd_x_asd,lw=1,alpha=0.65,label='QPD $x$')
         ax.semilogy(freqs,qpd_y_asd,lw=1,alpha=0.65,label='QPD $y$')
         if null:
@@ -950,7 +951,10 @@ def limit_vs_integration(agg_dict,descrip=None,sensor='qpd'):
 
     for i in range(num_samples):
         for j,ind in enumerate(subset_inds):
-            indices = np.random.randint(0,num_files,ind)
+            indices = []
+            while len(indices)<1:
+                indices = np.random.randint(0,num_files,ind)
+                indices = indices[~agg_dict['is_noise'][indices]]
             like_coeffs = fit_alpha_all_files(agg_dict,indices,sensor=sensor)
             like_coeffs = combine_likelihoods_over_dim(like_coeffs,which='file')
             like_coeffs = group_likelihoods_by_test(like_coeffs)
