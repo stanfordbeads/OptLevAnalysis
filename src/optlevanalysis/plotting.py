@@ -170,6 +170,9 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None,plot_n
     if plot_inds is None:
         plot_inds = shaking_inds(agg_dict)
 
+    # ensure the diagonalization matrix is not modified by reference
+    diag_mat = np.copy(qpd_diag_mat)
+
     # get the raw QPD data to plot
     raw_qpd_1 = agg_dict['quad_amps'][plot_inds][:,0,:]
     raw_qpd_2 = agg_dict['quad_amps'][plot_inds][:,1,:]
@@ -194,7 +197,7 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None,plot_n
                           (1.,-1.,-1.,1.)))
 
     # do the transformations from quadrants to x and y
-    new_resp = np.einsum('ij,jkl->ikl',qpd_diag_mat,signal_mat)
+    new_resp = np.einsum('ij,jkl->ikl',diag_mat,signal_mat)
     raw_resp = np.einsum('ij,jkl->ikl',naive_mat,signal_mat)
 
     # pick out the new x and y coordinates
@@ -366,8 +369,9 @@ def visual_diag_mat(qpd_diag_mat,overlay=True):
     '''
 
     # combine the two null channels into one
-    reduced_mat = qpd_diag_mat[:3,:]
-    reduced_mat[-1,:] = np.sum(qpd_diag_mat[3:,:],axis=0)/2.
+    diag_mat = np.copy(qpd_diag_mat)
+    reduced_mat = np.copy(diag_mat[:3,:])
+    reduced_mat[-1,:] = np.sum(diag_mat[3:,:],axis=0)/2.
     signs = np.sign(reduced_mat)
     if overlay:
         reduced_mat *= 2/np.linalg.norm(reduced_mat)
@@ -804,7 +808,7 @@ def position_drift(agg_dict,descrip=None,t_bin_width=None):
     return fig,ax
 
 
-def mles_vs_time(agg_dict,descrip=None,sensor='qpd',axis_ind=0,t_bin_width=None):
+def mles_vs_time(agg_dict, descrip=None, sensor='qpd', axis_ind=0, t_bin_width=None, pem_sensors=False):
     '''
     Plot the MLE for alpha over time for a few harmonics.
     '''
@@ -814,6 +818,9 @@ def mles_vs_time(agg_dict,descrip=None,sensor='qpd',axis_ind=0,t_bin_width=None)
 
     if t_bin_width is None:
         t_bin_width = max(60,int((agg_dict['timestamp'][-1]-agg_dict['timestamp'][0])/20))
+
+    # split up the harmonics into two plots if there are more than 7
+    num_plots = 1 + int(len(agg_dict['good_inds']) > 7)
     
     times = agg_dict['times']
     av_times = np.mean(times,axis=1)
@@ -836,6 +843,12 @@ def mles_vs_time(agg_dict,descrip=None,sensor='qpd',axis_ind=0,t_bin_width=None)
     err_alpha_t = np.zeros((num_t_bins,likelihood_coeffs.shape[1]))
     plot_times = np.zeros(num_t_bins)
 
+    # get the environmental data if requested
+    if pem_sensors:
+        pem_data = get_environmental_data(agg_dict)
+        num_plots += 2
+        pem_data_t = np.zeros((*np.shape(pem_data[1:,...])[:-1], num_t_bins))
+
     for i in range(num_t_bins):
         # add parabolic log-likelihoods
         summed_likelihoods = np.sum(likelihood_coeffs[i*t_bins:(i+1)*t_bins,:,axis_ind,lamb_ind,:],axis=0)
@@ -844,26 +857,64 @@ def mles_vs_time(agg_dict,descrip=None,sensor='qpd',axis_ind=0,t_bin_width=None)
         # one sigma error
         err_alpha_t[i,:] = 1./np.sqrt(2.*summed_likelihoods[:,0])
         plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
+        # downsample the environmental data if requested
+        if pem_sensors:
+            pem_data_t[:,:,i] = np.mean(pem_data[1:,:,i*t_bins:(i+1)*t_bins],axis=2)
 
+    # plot the MLEs
     colors = plt.get_cmap('rainbow',len(harm_freqs))
-
-    fig,ax = plt.subplots()
+    fig,ax = plt.subplots(num_plots, 1, figsize=(10, 3*num_plots + 2), sharex=True)
     for i in range(alpha_hat_t.shape[1]):
-        ax.errorbar(plot_times,alpha_hat_t[:,i]/1e8,yerr=2.*err_alpha_t[:,i]/1e8,color=colors(i),ls='none',\
-                    alpha=0.65,ms=3,marker='o',label='{:.0f} Hz'.format(harm_freqs[i]))
-    ax.plot([], [], ' ', label='95\% CI errors',zorder=0)
-    ax.set_title(r'MLE of $\alpha(\lambda=10\mu \mathrm{{m}})$ from {{{}}} {{{}}} for {{{}}}'\
-                 .format(sensor.upper(),axes[axis_ind],descrip))
-    ax.set_xlabel('Time since '+start_date+' [hours]')
-    ax.set_xlim([min(plot_times),max(plot_times)])
-    ax.set_ylabel(r'$\hat{\alpha} / 10^8$')
-    ax.grid(which='both')
-    handles, labels = ax.get_legend_handles_labels()
-    order = list(range(1,alpha_hat_t.shape[1]+1))+[0]
-    ax.legend([handles[idx] for idx in order],[labels[idx] for idx in order],ncol=4,fontsize=10)
+        if num_plots - 2*pem_sensors == 2:
+            ind = int(i > alpha_hat_t.shape[1]//2)
+        else:
+            ind = 0
+        ax[ind].errorbar(plot_times,alpha_hat_t[:,i]/1e8,yerr=2.*err_alpha_t[:,i]/1e8,color=colors(i),ls='none',\
+                         alpha=0.65,ms=3,marker='o',label='{:.0f} Hz'.format(harm_freqs[i]))
+    
+    # add the legend for the MLEs
+    for i in range(num_plots):
+        if (num_plots - i > 2) or not pem_sensors:
+            ax[i].plot([], [], ' ', label='95\% CI errors',zorder=0)
+            ax[i].set_ylabel(r'$\hat{\alpha} / 10^8$')
+            handles, labels = ax[i].get_legend_handles_labels()
+            order = list(range(1,len(ax[i].get_lines())))+[0]
+            ax[i].legend([handles[idx] for idx in order],[labels[idx] for idx in order],ncol=3,fontsize=10)
+        ax[i].grid(which='both')
+        
+    # plot the environmental data if requested
+    if pem_sensors:
+        colors = plt.get_cmap('Paired',12)
+        sensors = ['Fiber', 'Input', 'Output']
+        axis_2 = ax[-2].twinx()
+        for i in range(3):
+            ax[-2].plot(plot_times, pem_data_t[0,i,:], marker='s', ms=5, \
+                        color=colors(2*i), label=sensors[i]+' temperature')
+            axis_2.plot(plot_times, pem_data_t[1,i,:], marker='d', ms=5, \
+                        color=colors(2*i+1), label=sensors[i]+' rel. hum.')
+            ax[-1].plot(plot_times, pem_data_t[2,i,:], marker='o', ms=5, \
+                        color=colors(2*i), label=sensors[i]+' pressure')
+        ax[-2].set_ylabel('Temperature [$^\circ$C]')
+        handles1, labels1 = ax[-2].get_legend_handles_labels()
+        handles2, labels2 = axis_2.get_legend_handles_labels()
+        handles = [item for pair in zip(handles1, handles2) for item in pair]
+        labels = [item for pair in zip(labels1, labels2) for item in pair]
+        legend = axis_2.legend(handles, labels, ncol=3)
+        # legend.set_zorder(99)
+        axis_2.set_ylabel('Relative humidity [\%]')
+        ax[-1].set_ylabel('Pressure [mbar]')
+        ax[-1].legend(ncol=3)
 
+    # axis labels and limits
+    ax[0].set_title(r'MLE of $\alpha(\lambda=10\mu \mathrm{{m}})$ from {{{}}} {{{}}} for {{{}}}'\
+                    .format(sensor.upper(),axes[axis_ind],descrip))
+    ax[-1].set_xlabel('Time since '+start_date+' [hours]')
+    ax[-1].set_xlim([min(plot_times),max(plot_times)])
+
+    pem_data = None
+    pem_data_t = None
     del times, av_times, start_date, hours, harm_freqs, lamb_ind, likelihood_coeffs,\
-        delta_t, t_bins, num_t_bins, alpha_hat_t, plot_times, colors
+        delta_t, t_bins, num_t_bins, alpha_hat_t, plot_times, colors, pem_data_t, pem_data
     
     return fig,ax
 
@@ -889,7 +940,6 @@ def alpha_limit(agg_dict,descrip=None,sensor='qpd',title=None,lim_pos=None,lim_n
         lim_abs = get_abs_alpha_vs_lambda(likelihood_coeffs,lambdas)
         likelihood_coeffs = combine_likelihoods_over_dim(likelihood_coeffs,which='harm')
         lim_pos,lim_neg = get_alpha_vs_lambda(likelihood_coeffs,lambdas)
-        
 
     # get the other previously saved limits
     lims = h5py.File('/home/clarkeh/limits_all.h5','r')
