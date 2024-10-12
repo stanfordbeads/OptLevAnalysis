@@ -436,119 +436,99 @@ def visual_diag_mat(qpd_diag_mat,overlay=True):
     return fig,ax
 
 
-def spectra(agg_dict,descrip=None,harms=[],which='roi',ylim=None,accel=False,\
-            xypd=True,null=True,plot_inds=None):
+def spectra(agg_dicts, descrip=None, plot_inds=None, harms=[], which='roi', null=True, ylim=None):
     '''
     Plof of the QPD and XYPD spectra for a given dataset.
     '''
+
+    if isinstance(agg_dicts, dict):
+        agg_dicts = [agg_dicts]
+
     if descrip is None:
-        descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
+        descrips = [datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d') for agg_dict in agg_dicts]
 
     if plot_inds is None:
-        plot_inds = shaking_inds(agg_dict)
-        plot_inds = np.arange(np.shape(agg_dict['qpd_ffts_full'])[0])
+        plot_inds = [shaking_inds(agg_dict) for agg_dict in agg_dicts]
 
-    freqs = agg_dict['freqs']
-    fsamp = agg_dict['fsamp']
-    window_s1 = agg_dict['window_s1']
-    window_s2 = agg_dict['window_s2']
-    fft_to_asd = window_s1/np.sqrt(2.*fsamp*window_s2)
+    # figure setup
+    plt.rcParams.update({'figure.autolayout': False})
+    fig,ax = plt.subplots(3, 2, figsize=(10, 12), sharex='col', sharey='row')
+    colors = style.library['fivethirtyeight']['axes.prop_cycle'].by_key()['color']
+    axes = ['x', 'y', 'z']
+    zlabel = 'ZPD'
+    if null:
+        axes[-1] = 'null'
+        zlabel = 'QPD null'
 
-    qpd_x_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds,0,:]*fft_to_asd)
-    qpd_y_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds,1,:]*fft_to_asd)
-    qpd_n_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds,3,:]*fft_to_asd)
-    xypd_x_asds = np.abs(agg_dict['xypd_ffts_full'][plot_inds,0,:]*fft_to_asd)
-    xypd_y_asds = np.abs(agg_dict['xypd_ffts_full'][plot_inds,1,:]*fft_to_asd)
-    z_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds,2,:]*fft_to_asd)
-    if accel:
-    # convert accelerometer data to m/s^2 using 1000 V/g calibration factor
-        accel_ffts = np.fft.rfft(np.sqrt(np.sum(agg_dict['accelerometer']**2,axis=1))\
-                                 *9.8/1000.,axis=-1)[:,:len(freqs)]*2./window_s1
-        accel_asds = np.abs(accel_ffts*fft_to_asd)
+    for a, agg_dict in enumerate(agg_dicts):
 
-    qpd_x_asd = np.sqrt(np.median(qpd_x_asds**2,axis=0))
-    qpd_y_asd = np.sqrt(np.median(qpd_y_asds**2,axis=0))
-    qpd_n_asd = np.sqrt(np.median(qpd_n_asds**2,axis=0))
-    xypd_x_asd = np.sqrt(np.median(xypd_x_asds**2,axis=0))
-    xypd_y_asd = np.sqrt(np.median(xypd_y_asds**2,axis=0))
-    z_asd = np.sqrt(np.median(z_asds**2,axis=0))
-    if accel:
-        accel_asd = np.sqrt(np.median(accel_asds**2,axis=0))
-
-    fig,ax = plt.subplots()
-    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
-    if len(harms):
-        [ax.axvline(3*(i+1),ls='--',lw=1.5,alpha=0.5,color='black') for i in harms]
-    ax.set_ylabel('ASD [N/$\sqrt{\mathrm{Hz}}$]')
-    ax.set_xlabel('Frequency [Hz]')
-
-     # if the calibration has not been applied, scale the limits so the data will still appear
-    ylim_scale = 1
-    if np.all(qpd_x_asds > 1e-14):
-        ylim_scale = 1e11
-        z_asd *= 1e-7
-        ax.set_ylabel('ASD [au/$\sqrt{\mathrm{Hz}}$]')
-    
-    if which=='roi':
-        if ylim is None:
-            ylim = np.array([1e-18,2e-14])*ylim_scale
-        ax.semilogy(freqs,qpd_x_asd,lw=1,alpha=0.65,label='QPD $x$')
-        ax.semilogy(freqs,qpd_y_asd,lw=1,alpha=0.65,label='QPD $y$')
+        # get data to be plotted
+        freqs = agg_dict['freqs']
+        fsamp = agg_dict['fsamp']
+        window_s1 = agg_dict['window_s1']
+        window_s2 = agg_dict['window_s2']
+        fft_to_asd = window_s1/np.sqrt(2.*fsamp*window_s2)
+        qpd_x_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds[a],0,:]*fft_to_asd)
+        qpd_y_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds[a],1,:]*fft_to_asd)
+        qpd_n_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds[a],3,:]*fft_to_asd)
+        xypd_x_asds = np.abs(agg_dict['xypd_ffts_full'][plot_inds[a],0,:]*fft_to_asd)
+        xypd_y_asds = np.abs(agg_dict['xypd_ffts_full'][plot_inds[a],1,:]*fft_to_asd)
+        z_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds[a],2,:]*fft_to_asd)
+        qpd_x_asd = np.sqrt(np.median(qpd_x_asds**2,axis=0))
+        qpd_y_asd = np.sqrt(np.median(qpd_y_asds**2,axis=0))
+        xypd_x_asd = np.sqrt(np.median(xypd_x_asds**2,axis=0))
+        xypd_y_asd = np.sqrt(np.median(xypd_y_asds**2,axis=0))
         if null:
-            ax.semilogy(freqs,qpd_n_asd,lw=1,alpha=0.65,label='QPD null')
-        ax.semilogy(freqs,z_asd,lw=1,alpha=0.65,label='ZPD')
-        if xypd:
-            ax.semilogy(freqs,xypd_x_asd,lw=1,alpha=0.65,label='XYPD $x$')
-            ax.semilogy(freqs,xypd_y_asd,lw=1,alpha=0.65,label='XYPD $y$')
-        if accel:
-            ax2 = ax.twinx()
-            ax2.semilogy(freqs,accel_asd,lw=1,alpha=0.65,color=colors[len(ax.lines)],label='Accel.')
-            ax2.set_ylabel('ASD [$\mathrm{m/s^2}/\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
-        ax.set_xlim([0.1,50])
-        ax.set_ylim(ylim)
-        ax.set_title('Calibrated spectra in ROI for '+descrip)
-    elif which=='full':
-        if ylim is None:
-            ylim = np.array([1e-18,2e-14])*ylim_scale
-        ax.loglog(freqs,qpd_x_asd,lw=1,alpha=0.65,label='QPD $x$')
-        ax.loglog(freqs,qpd_y_asd,lw=1,alpha=0.65,label='QPD $y$')
-        if null:
-            ax.loglog(freqs,qpd_n_asd,lw=1,alpha=0.65,label='QPD null')
-        ax.loglog(freqs,z_asd,lw=1,alpha=0.65,label='ZPD')
-        if xypd:
-            ax.loglog(freqs,xypd_x_asd,lw=1,alpha=0.65,label='XYPD $x$')
-            ax.loglog(freqs,xypd_y_asd,lw=1,alpha=0.65,label='XYPD $y$')
-        if accel:
-            ax2 = ax.twinx()
-            ax2.loglog(freqs,accel_asd,lw=1,alpha=0.65,color=colors[len(ax.lines)],label='Accel.')
-            ax2.set_ylabel('ASD [$\mathrm{m/s^2}/\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
-        ax.set_xlim([0.1,max(freqs)])
-        ax.set_ylim(ylim)
-        ax.set_title('Full calibrated spectra for '+descrip)
-    elif which=='rayleigh':
-        if ylim is None:
-            ylim = [1e-1,1e1]
-        ax.semilogy(freqs,rayleigh(qpd_x_asds**2),lw=1,alpha=0.65,label='QPD $x$')
-        ax.semilogy(freqs,rayleigh(qpd_y_asds**2),lw=1,alpha=0.65,label='QPD $y$')
-        ax.semilogy(freqs,rayleigh(xypd_x_asds**2),lw=1,alpha=0.65,label='XYPD $x$')
-        ax.semilogy(freqs,rayleigh(xypd_y_asds**2),lw=1,alpha=0.65,label='XYPD $y$')
-        ax.semilogy(freqs,rayleigh(z_asds**2),lw=1,alpha=0.65,label='ZPD')
-        if accel:
-            ax2 = ax.twinx()
-            ax2.semilogy(freqs,rayleigh(accel_asds**2),lw=1,alpha=0.65,color=colors[len(ax.lines)],label='Accel.')
-            ax2.set_ylim(ylim)
-        ax.set_ylabel('Rayleigh statistic [1/$\sqrt{\mathrm{Hz}}$]')
-        ax.set_xlabel('Frequency [Hz]')
-        ax.set_xlim([0.1,50])
-        ax.set_ylim(ylim)
-        ax.set_title('Rayleigh spectra in ROI for '+descrip)
-    ax.grid(which='both')
-    if accel:
-        lines = ax.lines + ax2.lines
-        labels = [l.get_label() for l in lines]
-        ax.legend(lines,labels,ncol=2+int(xypd))
-    else:
-        ax.legend(ncol=2+int(xypd))
+            z_asd = np.sqrt(np.median(qpd_n_asds**2,axis=0))
+            z_asd[z_asd<1e-5*np.mean(z_asd)] = 0
+        else:
+            z_asd = np.sqrt(np.median(z_asds**2,axis=0))
+
+        # plot harmonics and set axis labels
+        if len(harms):
+            [ax[j,k].axvline(3*(i+1),ls='--',lw=0.7,alpha=0.7,color='black') for i in harms for j in range(2) for k in range(2)]
+            [ax[-1,0].axvline(3*(i+1),ls='--',lw=0.7,alpha=0.7,color='black') for i in harms]
+        [ax[i,0].set_ylabel('$F_{' + axes[i] + '}$ ASD [N/$\sqrt{\mathrm{Hz}}$]') for i in range(3)]
+        ax[2,0].set_xlabel('Frequency [Hz]')
+        ax[1,1].set_xlabel('Frequency [Hz]')
+        ax[0,0].set_title('Heterodyne')
+        ax[0,1].set_title('DC')
+        
+        if which=='roi':
+            ax[0,0].semilogy(freqs,qpd_x_asd,lw=1,color=colors[a],label='QPD $x$, ' + descrips[a])
+            ax[1,0].semilogy(freqs,qpd_y_asd,lw=1,color=colors[a],label='QPD $y$, ' + descrips[a])
+            ax[2,0].semilogy(freqs,z_asd,lw=1,color=colors[a],label=zlabel + ', ' + descrips[a])
+            ax[0,1].semilogy(freqs,xypd_x_asd,lw=1,color=colors[a],label='XYPD $x$, ' + descrips[a])
+            ax[1,1].semilogy(freqs,xypd_y_asd,lw=1,color=colors[a],label='XYPD $y$, ' + descrips[a])
+            [ax[-1,i].set_xlim([0,50]) for i in range(2)]
+            fig.suptitle('Force spectral densities in ROI', y=0.94, fontsize=20)
+        elif which=='full':
+            ax[0,0].loglog(freqs,qpd_x_asd,lw=1,color=colors[a],label='QPD $x$, ' + descrips[a])
+            ax[1,0].loglog(freqs,qpd_y_asd,lw=1,color=colors[a],label='QPD $y$, ' + descrips[a])
+            ax[2,0].loglog(freqs,z_asd,lw=1,color=colors[a],label=zlabel + ', ' + descrips[a])
+            ax[0,1].loglog(freqs,xypd_x_asd,lw=1,color=colors[a],label='XYPD $x$, ' + descrips[a])
+            ax[1,1].loglog(freqs,xypd_y_asd,lw=1,color=colors[a],label='XYPD $y$, ' + descrips[a])
+            [ax[-1,i].set_xlim([1,max(freqs)]) for i in range(2)]
+            fig.suptitle('Force spectral densities over all frequencies', y=0.94, fontsize=20)
+        elif which=='rayleigh':
+            ax[0,0].semilogy(freqs,rayleigh(qpd_x_asds**2),lw=1,color=colors[a],label='QPD $x$, ' + descrips[a])
+            ax[1,0].semilogy(freqs,rayleigh(qpd_y_asds**2),lw=1,color=colors[a],label='QPD $y$, ' + descrips[a])
+            ax[2,0].semilogy(freqs,rayleigh(z_asds**2),lw=1,color=colors[a],label=zlabel + ', ' + descrips[a])
+            ax[0,1].semilogy(freqs,rayleigh(xypd_x_asds**2),lw=1,color=colors[a],label='XYPD $x$, ' + descrips[a])
+            ax[1,1].semilogy(freqs,rayleigh(xypd_y_asds**2),lw=1,color=colors[a],label='XYPD $y$, ' + descrips[a])
+            [ax[i,0].set_ylabel('$' + axes[i] + '$ Rayleigh statistic [1/Hz]') for i in range(3)]
+            [ax[-1,i].set_xlim([0,50]) for i in range(2)]
+            fig.suptitle('Rayleigh statistic spectral densities in ROI', y=0.94, fontsize=20)
+
+    # legend, grids, layout
+    if ylim is not None:
+        [ax[i,0].set_ylim(ylim) for i in range(3)]
+    [ax[i,j].legend() for i in range(2) for j in range(2)]
+    ax[-1,0].legend()
+    [ax[i,j].grid(which='both') for i in range(3) for j in range(2)]
+    ax[-1,-1].axis('off')
+    ax[-2,-1].tick_params(axis='x', which='both', bottom=True, top=False, labelbottom=True)
+    fig.subplots_adjust(hspace=0.1, wspace=0.07)
 
     # for some reason memory is not released and in subsequent function calls this can cause errors
     del qpd_x_asds,qpd_y_asds,xypd_x_asds,xypd_y_asds,z_asds,\
