@@ -436,7 +436,8 @@ def visual_diag_mat(qpd_diag_mat,overlay=True):
     return fig,ax
 
 
-def spectra(agg_dicts, descrip=None, plot_inds=None, harms=[], which='roi', null=True, ylim=None):
+def spectra(agg_dicts, descrip=None, plot_inds=None, harms=[], which='roi', \
+            average=True, density=True, null=True, ylim=None):
     '''
     Plof of the QPD and XYPD spectra for a given dataset.
     '''
@@ -449,6 +450,11 @@ def spectra(agg_dicts, descrip=None, plot_inds=None, harms=[], which='roi', null
 
     if plot_inds is None:
         plot_inds = [shaking_inds(agg_dict) for agg_dict in agg_dicts]
+
+    if which=='rayleigh' and ((not density) or (not average)):
+        print('Ignoring density and average arguments for Rayleigh statistic plot...')
+        density = True
+        average = True
 
     # figure setup
     plt.rcParams.update({'figure.autolayout': False})
@@ -467,58 +473,80 @@ def spectra(agg_dicts, descrip=None, plot_inds=None, harms=[], which='roi', null
         fsamp = agg_dict['fsamp']
         window_s1 = agg_dict['window_s1']
         window_s2 = agg_dict['window_s2']
-        fft_to_asd = window_s1/np.sqrt(2.*fsamp*window_s2)
-        qpd_x_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds[a],0,:]*fft_to_asd)
-        qpd_y_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds[a],1,:]*fft_to_asd)
-        qpd_n_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds[a],3,:]*fft_to_asd)
-        xypd_x_asds = np.abs(agg_dict['xypd_ffts_full'][plot_inds[a],0,:]*fft_to_asd)
-        xypd_y_asds = np.abs(agg_dict['xypd_ffts_full'][plot_inds[a],1,:]*fft_to_asd)
-        z_asds = np.abs(agg_dict['qpd_ffts_full'][plot_inds[a],2,:]*fft_to_asd)
-        qpd_x_asd = np.sqrt(np.median(qpd_x_asds**2,axis=0))
-        qpd_y_asd = np.sqrt(np.median(qpd_y_asds**2,axis=0))
-        xypd_x_asd = np.sqrt(np.median(xypd_x_asds**2,axis=0))
-        xypd_y_asd = np.sqrt(np.median(xypd_y_asds**2,axis=0))
-        if null:
-            z_asd = np.sqrt(np.median(qpd_n_asds**2,axis=0))
-            z_asd[z_asd<1e-5*np.mean(z_asd)] = 0
+
+        # scale to spectral density if requested
+        fft_scaling = 1.
+        if density:
+            fft_scaling *= window_s1/np.sqrt(2.*fsamp*window_s2)
+
+        # scaling factor for integration time if not just averaging spectra
+        if not average:
+            fft_scaling *= 1./(np.sqrt(agg_dict['qpd_ffts'].shape[0]))**(1. + int(not density))
+
+        # ffts are in the form of a peak amplitude spectrum
+        qpd_x_ffts = agg_dict['qpd_ffts_full'][plot_inds[a],0,:]
+        qpd_y_ffts = agg_dict['qpd_ffts_full'][plot_inds[a],1,:]
+        qpd_n_ffts = agg_dict['qpd_ffts_full'][plot_inds[a],3,:]
+        xypd_x_ffts = agg_dict['xypd_ffts_full'][plot_inds[a],0,:]
+        xypd_y_ffts = agg_dict['xypd_ffts_full'][plot_inds[a],1,:]
+        z_ffts = agg_dict['qpd_ffts_full'][plot_inds[a],2,:]
+
+        # either average the amplitude spectra, or add the raw DFTs to allow
+        # coherent measurements across datasets to rise above the noise
+        if average:
+            qpd_x_spec = np.mean(np.abs(qpd_x_ffts), axis=0)*fft_scaling
+            qpd_y_spec = np.mean(np.abs(qpd_y_ffts), axis=0)*fft_scaling
+            qpd_n_spec = np.mean(np.abs(qpd_n_ffts), axis=0)*fft_scaling
+            xypd_x_spec = np.mean(np.abs(xypd_x_ffts), axis=0)*fft_scaling
+            xypd_y_spec = np.mean(np.abs(xypd_y_ffts), axis=0)*fft_scaling
+            z_spec = np.mean(np.abs(z_ffts), axis=0)*fft_scaling
         else:
-            z_asd = np.sqrt(np.median(z_asds**2,axis=0))
+            qpd_x_spec = np.abs(np.sum(qpd_x_ffts, axis=0))*fft_scaling
+            qpd_y_spec = np.abs(np.sum(qpd_y_ffts, axis=0))*fft_scaling
+            qpd_n_spec = np.abs(np.sum(qpd_n_ffts, axis=0))*fft_scaling
+            xypd_x_spec = np.abs(np.sum(xypd_x_ffts, axis=0))*fft_scaling
+            xypd_y_spec = np.abs(np.sum(xypd_y_ffts, axis=0))*fft_scaling
+            z_spec = np.abs(np.sum(z_ffts, axis=0))*fft_scaling
+
+        if null:
+            z_spec = qpd_n_spec
+            z_spec[z_spec<1e-5*np.mean(z_spec)] = 0
 
         # plot harmonics and set axis labels
         if len(harms):
             [ax[j,k].axvline(3*(i+1),ls='--',lw=0.7,alpha=0.7,color='black') for i in harms for j in range(2) for k in range(2)]
             [ax[-1,0].axvline(3*(i+1),ls='--',lw=0.7,alpha=0.7,color='black') for i in harms]
-        [ax[i,0].set_ylabel('$F_{' + axes[i] + '}$ ASD [N/$\sqrt{\mathrm{Hz}}$]') for i in range(3)]
+        [ax[i,0].set_ylabel('$F_{' + axes[i] + '}$ [N' + [']','/$\sqrt{\mathrm{Hz}}$]'][density]) for i in range(3)]
         ax[2,0].set_xlabel('Frequency [Hz]')
         ax[1,1].set_xlabel('Frequency [Hz]')
         ax[0,0].set_title('Heterodyne')
         ax[0,1].set_title('DC')
         
         if which=='roi':
-            ax[0,0].semilogy(freqs,qpd_x_asd,lw=1,color=colors[a],label='QPD $x$, ' + descrips[a])
-            ax[1,0].semilogy(freqs,qpd_y_asd,lw=1,color=colors[a],label='QPD $y$, ' + descrips[a])
-            ax[2,0].semilogy(freqs,z_asd,lw=1,color=colors[a],label=zlabel + ', ' + descrips[a])
-            ax[0,1].semilogy(freqs,xypd_x_asd,lw=1,color=colors[a],label='XYPD $x$, ' + descrips[a])
-            ax[1,1].semilogy(freqs,xypd_y_asd,lw=1,color=colors[a],label='XYPD $y$, ' + descrips[a])
+            ax[0,0].semilogy(freqs,qpd_x_spec,lw=1,color=colors[a],label='QPD $x$, ' + descrips[a])
+            ax[1,0].semilogy(freqs,qpd_y_spec,lw=1,color=colors[a],label='QPD $y$, ' + descrips[a])
+            ax[2,0].semilogy(freqs,z_spec,lw=1,color=colors[a],label=zlabel + ', ' + descrips[a])
+            ax[0,1].semilogy(freqs,xypd_x_spec,lw=1,color=colors[a],label='XYPD $x$, ' + descrips[a])
+            ax[1,1].semilogy(freqs,xypd_y_spec,lw=1,color=colors[a],label='XYPD $y$, ' + descrips[a])
             [ax[-1,i].set_xlim([0,50]) for i in range(2)]
-            fig.suptitle('Force spectral densities in ROI', y=0.94, fontsize=20)
+            fig.suptitle('Force spectra' + ['','l densities'][density] + ' in ROI', y=0.94, fontsize=20)
         elif which=='full':
-            ax[0,0].loglog(freqs,qpd_x_asd,lw=1,color=colors[a],label='QPD $x$, ' + descrips[a])
-            ax[1,0].loglog(freqs,qpd_y_asd,lw=1,color=colors[a],label='QPD $y$, ' + descrips[a])
-            ax[2,0].loglog(freqs,z_asd,lw=1,color=colors[a],label=zlabel + ', ' + descrips[a])
-            ax[0,1].loglog(freqs,xypd_x_asd,lw=1,color=colors[a],label='XYPD $x$, ' + descrips[a])
-            ax[1,1].loglog(freqs,xypd_y_asd,lw=1,color=colors[a],label='XYPD $y$, ' + descrips[a])
+            ax[0,0].loglog(freqs,qpd_x_spec,lw=1,color=colors[a],label='QPD $x$, ' + descrips[a])
+            ax[1,0].loglog(freqs,qpd_y_spec,lw=1,color=colors[a],label='QPD $y$, ' + descrips[a])
+            ax[2,0].loglog(freqs,z_spec,lw=1,color=colors[a],label=zlabel + ', ' + descrips[a])
+            ax[0,1].loglog(freqs,xypd_x_spec,lw=1,color=colors[a],label='XYPD $x$, ' + descrips[a])
+            ax[1,1].loglog(freqs,xypd_y_spec,lw=1,color=colors[a],label='XYPD $y$, ' + descrips[a])
             [ax[-1,i].set_xlim([1,max(freqs)]) for i in range(2)]
-            fig.suptitle('Force spectral densities over all frequencies', y=0.94, fontsize=20)
+            fig.suptitle('Force spectra' + ['','l densities'][density] + ' over all frequencies', y=0.94, fontsize=20)
         elif which=='rayleigh':
-            ax[0,0].semilogy(freqs,rayleigh(qpd_x_asds**2),lw=1,color=colors[a],label='QPD $x$, ' + descrips[a])
-            ax[1,0].semilogy(freqs,rayleigh(qpd_y_asds**2),lw=1,color=colors[a],label='QPD $y$, ' + descrips[a])
-            ax[2,0].semilogy(freqs,rayleigh(z_asds**2),lw=1,color=colors[a],label=zlabel + ', ' + descrips[a])
-            ax[0,1].semilogy(freqs,rayleigh(xypd_x_asds**2),lw=1,color=colors[a],label='XYPD $x$, ' + descrips[a])
-            ax[1,1].semilogy(freqs,rayleigh(xypd_y_asds**2),lw=1,color=colors[a],label='XYPD $y$, ' + descrips[a])
+            ax[0,0].semilogy(freqs,rayleigh(np.abs(qpd_x_ffts*fft_scaling)**2),lw=1,color=colors[a],label='QPD $x$, ' + descrips[a])
+            ax[1,0].semilogy(freqs,rayleigh(np.abs(qpd_y_ffts*fft_scaling)**2),lw=1,color=colors[a],label='QPD $y$, ' + descrips[a])
+            ax[2,0].semilogy(freqs,rayleigh(np.abs(z_ffts*fft_scaling)**2),lw=1,color=colors[a],label=zlabel + ', ' + descrips[a])
+            ax[0,1].semilogy(freqs,rayleigh(np.abs(xypd_x_ffts*fft_scaling)**2),lw=1,color=colors[a],label='XYPD $x$, ' + descrips[a])
+            ax[1,1].semilogy(freqs,rayleigh(np.abs(xypd_y_ffts*fft_scaling)**2),lw=1,color=colors[a],label='XYPD $y$, ' + descrips[a])
             [ax[i,0].set_ylabel('$' + axes[i] + '$ Rayleigh statistic [1/Hz]') for i in range(3)]
             [ax[-1,i].set_xlim([0,50]) for i in range(2)]
-            fig.suptitle('Rayleigh statistic spectral densities in ROI', y=0.94, fontsize=20)
+            fig.suptitle('Rayleigh statistic spectra' + ['','l densities'][density] + ' in ROI', y=0.94, fontsize=20)
 
     # legend, grids, layout
     if ylim is not None:
@@ -531,8 +559,8 @@ def spectra(agg_dicts, descrip=None, plot_inds=None, harms=[], which='roi', null
     fig.subplots_adjust(hspace=0.1, wspace=0.07)
 
     # for some reason memory is not released and in subsequent function calls this can cause errors
-    del qpd_x_asds,qpd_y_asds,xypd_x_asds,xypd_y_asds,z_asds,\
-        qpd_x_asd,qpd_y_asd,xypd_x_asd,xypd_y_asd,z_asd,freqs
+    del qpd_x_spec,qpd_y_spec,xypd_x_spec,xypd_y_spec,z_spec,\
+        qpd_x_ffts,qpd_y_ffts,xypd_x_ffts,xypd_y_ffts,z_ffts,freqs
 
     return fig,ax
 
