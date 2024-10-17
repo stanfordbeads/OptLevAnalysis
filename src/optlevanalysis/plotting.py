@@ -436,8 +436,8 @@ def visual_diag_mat(qpd_diag_mat,overlay=True):
     return fig,ax
 
 
-def spectra(agg_dicts, descrip=None, plot_inds=None, harms=[], which='roi', \
-            average=True, density=True, null=True, ylim=None):
+def spectra(agg_dicts, descrips=None, plot_inds=None, harms=[], which='roi', \
+            average=True, density=True, null=True, accel=False, ylim=None):
     '''
     Plof of the QPD and XYPD spectra for a given dataset.
     '''
@@ -445,7 +445,7 @@ def spectra(agg_dicts, descrip=None, plot_inds=None, harms=[], which='roi', \
     if isinstance(agg_dicts, dict):
         agg_dicts = [agg_dicts]
 
-    if descrip is None:
+    if descrips is None:
         descrips = [datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d') for agg_dict in agg_dicts]
 
     if plot_inds is None:
@@ -680,62 +680,66 @@ def time_evolution(agg_dict,descrip=None,sensor='qpd',axis_ind=0,\
     if t_bin_width is None:
         t_bin_width = max(60,int((agg_dict['timestamp'][-1]-agg_dict['timestamp'][0])/20))
 
+    # split up the harmonics into two plots if there are more than 7
+    num_plots = 1 + int(len(agg_dict['good_inds']) > 7)
+
     # get timing information from the dictionary
     times = agg_dict['times']
     av_times = np.mean(times,axis=1)
     start_date = datetime.fromtimestamp(av_times[0]*1e-9).strftime('%b %d, %H:%M:%S')
     hours = (av_times-av_times[0])*1e-9/3600.
     freqs = agg_dict['freqs']
-    fsamp = agg_dict['fsamp']
-    window_s1 = agg_dict['window_s1']
-    window_s2 = agg_dict['window_s2']
-    fft_to_asd = window_s1/np.sqrt(2.*fsamp*window_s2)
     good_freqs = freqs[agg_dict['good_inds']]
     axes = ['x','y','z']
-    colors = plt.get_cmap('plasma',len(good_freqs)+1)
+    colors = plt.get_cmap('plasma',len(good_freqs)//num_plots+1)
 
     # get amplitude and phase for the sensor and axis
-    asds = np.abs(agg_dict[sensor+'_ffts'][:,axis_ind,:])*fft_to_asd
+    amps = np.abs(agg_dict[sensor+'_ffts'][:,axis_ind,:])
     phases = np.angle(agg_dict[sensor+'_ffts'][:,axis_ind,:])*180./np.pi
 
     # take the average in each time interval
     delta_t = (av_times[1]-av_times[0])*1e-9
     t_bins = int(round(t_bin_width/delta_t))
     num_t_bins = int(len(av_times)/t_bins)
-    asd_t = np.zeros((num_t_bins,asds.shape[1]))
-    phase_t = np.zeros((num_t_bins,asds.shape[1]))
+    asd_t = np.zeros((num_t_bins,amps.shape[1]))
+    phase_t = np.zeros((num_t_bins,amps.shape[1]))
     plot_times = np.zeros(num_t_bins)
 
     for i in range(num_t_bins):
-        asd_t[i,:] = np.sqrt(np.mean(asds[i*t_bins:(i+1)*t_bins,:]**2,axis=0))
+        asd_t[i,:] = np.sqrt(np.mean(amps[i*t_bins:(i+1)*t_bins,:]**2,axis=0))
         phase_t[i,:] = np.mean(phases[i*t_bins:(i+1)*t_bins,:],axis=0)
         plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
 
     # plot the results
-    fig,ax = plt.subplots(2,1,figsize=(8,8),sharex=True)
+    fig,ax = plt.subplots(2, num_plots, figsize=(2+6*num_plots, 8), sharex=True, sharey='row', squeeze=False)
+    ind = 0
     for i in range(len(good_freqs)):
-        ax[0].semilogy(plot_times,asd_t[:,i],ls='none',marker='o',ms=6,alpha=0.45,\
-                    label='{:.1f} Hz'.format(good_freqs[i]),color=colors(i))
-        ax[1].plot(plot_times,phase_t[:,i],ls='none',marker='o',ms=6,alpha=0.45,\
-                label='{:.1f} Hz'.format(good_freqs[i]),color=colors(i))
-    ax[0].set_ylabel('ASD [N/$\sqrt{\mathrm{Hz}}$]')
-    if np.all(asds > 1e-14):
-        ax[0].set_ylabel('ASD [au/$\sqrt{\mathrm{Hz}}$]')
+        if num_plots > 1:
+            ind = int(i > asd_t.shape[1]//2)
+        ax[0,ind].semilogy(plot_times,asd_t[:,i],ls='none',marker='o',ms=6,alpha=0.75,\
+                    label='{:.1f} Hz'.format(good_freqs[i]),color=colors(i-ind*asd_t.shape[1]//2))
+        ax[1,ind].plot(plot_times,phase_t[:,i],ls='none',marker='o',ms=6,alpha=0.75,\
+                label='{:.1f} Hz'.format(good_freqs[i]),color=colors(i-ind*asd_t.shape[1]//2))
+    ax[0,0].set_ylabel('Amplitude [N]')
+    if np.all(amps > 1e-14):
+        ax[0,0].set_ylabel('Amplitude [au]')
     if ylim is not None:
-        ax[0].set_ylim(ylim)
-    ax[0].set_title('Time evolution of '+sensor.upper()+' $'+axes[axis_ind]+'$ for '+descrip)
-    ax[0].grid(which='both')
-    ax[0].legend(fontsize=12,ncol=4)
+        ax[0,0].set_ylim(ylim)
+    fig.suptitle('Time evolution of '+sensor.upper()+' $'+axes[axis_ind]+'$ for '+descrip)
+    for i in range(2):
+        for j in range(num_plots):
+            ax[i,j].grid(which='both')
+            ax[i,j].legend(fontsize=12,ncol=2)
 
-    ax[1].set_xlabel('Time since '+start_date+' [hours]')
-    ax[1].set_ylabel('Phase [$^\circ$]')
-    ax[1].set_xlim([0,max(plot_times)])
-    ax[1].set_ylim([-200,200])
-    ax[1].set_yticks([-180,0,180])
-    ax[1].grid(which='both')
+    for i in range(num_plots):
+        ax[1,i].set_xlabel('Time since '+start_date+' [hours]')
+        ax[1,i].set_xlim([0,max(plot_times)])
+    ax[1,0].set_ylabel('Phase [$^\circ$]')
+    ax[1,0].set_ylim([-200,200])
+    ax[1,0].set_yticks([-180,0,180])
 
     # for some reason memory is not released and in subsequent function calls this can cause errors
-    del freqs,asds,phases,times,av_times,start_date,hours,\
+    del freqs,amps,phases,times,av_times,start_date,hours,\
         plot_times,asd_t,phase_t,num_t_bins,t_bins,delta_t
 
     return fig,ax
