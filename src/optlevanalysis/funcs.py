@@ -187,3 +187,58 @@ def gv_decimate(x, q, LPF, axis=-1):
     sl[axis] = slice(None, None, q)
     y = sig.sosfiltfilt(LPF, x)
     return y[tuple(sl)]
+
+def get_environmental_data(agg_dict):
+    """
+    Get the environmental data from the PEM sensors for a given aggregate data dictionary.
+
+    :agg_dict:                  aggregate data dictionary
+    """
+    
+    from datetime import datetime, timedelta
+
+    # get the range of files to look at based on timestamps
+    min_time = min(agg_dict['timestamp'])
+    max_time = max(agg_dict['timestamp'])
+    min_time = datetime.fromtimestamp(min_time).strftime('%Y%m%d')
+    max_time = datetime.fromtimestamp(max_time).strftime('%Y%m%d')
+    start = datetime.strptime(min_time, '%Y%m%d')
+    end = datetime.strptime(max_time, '%Y%m%d')
+
+    date_list = []
+    current_date = start
+    date_list = [(current_date - timedelta(days=1)).strftime('%Y%m%d')]
+    while current_date <= end:
+        date_list.append(current_date.strftime('%Y%m%d'))
+        current_date += timedelta(days=1)
+    date_list.append(current_date.strftime('%Y%m%d'))
+
+    # build paths to the PEM sensor data for each date
+    sensors = ['fiber', 'input', 'output']
+    base_paths = [['/data/PEMsensors/' + date + '/yoctopuce_newtrap_' + sens + '.csv' \
+                   for date in date_list] for sens in sensors]
+
+    # load the data
+    datetimes = [[] for _ in range(len(base_paths))]
+    temps = [[] for _ in range(len(base_paths))]
+    relhums = [[] for _ in range(len(base_paths))]
+    pressures = [[] for _ in range(len(base_paths))]
+    for i, paths in enumerate(base_paths):
+        for path in paths:
+            with open(path, 'r') as f:
+                for line in f:
+                    line = line.split(',')
+                    datetimes[i].append(datetime.strptime(line[0], '%Y-%m-%d %H:%M:%S'))
+                    temps[i].append(float(line[1]))
+                    relhums[i].append(float(line[2]))
+                    pressures[i].append(float(line[3]))
+
+    # build a numpy array to store the data
+    temps_arr = np.array(temps)
+    relhums_arr = np.array(relhums)
+    pressures_arr = np.array(pressures)
+    datetimes_arr = np.array(datetimes)
+
+    pem_data = np.vstack([datetimes_arr[np.newaxis,...], temps_arr[np.newaxis,...], \
+                          relhums_arr[np.newaxis,...], pressures_arr[np.newaxis,...]])
+    return pem_data
