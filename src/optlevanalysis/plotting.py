@@ -4,7 +4,7 @@ from matplotlib.colors import LogNorm,to_rgba
 import matplotlib.style as style
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
-from datetime import datetime
+from datetime import datetime, timedelta
 from scipy import signal
 import scipy.stats as st
 import h5py
@@ -836,7 +836,8 @@ def mles_vs_time(agg_dict, descrip=None, sensor='qpd', axis_ind=0, t_bin_width=N
     
     times = agg_dict['times']
     av_times = np.mean(times,axis=1)
-    start_date = datetime.fromtimestamp(av_times[0]*1e-9).strftime('%b %d, %H:%M:%S')
+    start_dt = datetime.fromtimestamp(av_times[0]*1e-9)
+    start_date = start_dt.strftime('%b %d, %H:%M:%S')
     hours = (av_times-av_times[0])*1e-9/3600.
     harm_freqs = agg_dict['freqs'][agg_dict['good_inds']]
     axes = ['$x$','$y$','$z$']
@@ -857,7 +858,9 @@ def mles_vs_time(agg_dict, descrip=None, sensor='qpd', axis_ind=0, t_bin_width=N
 
     # get the environmental data if requested
     if pem_sensors:
+        pem_times_t = np.zeros(num_t_bins)
         pem_data = get_environmental_data(agg_dict)
+        pem_times = pem_data[0,0,:]
         num_plots += 2
         pem_data_t = np.zeros((*np.shape(pem_data[1:,...])[:-1], num_t_bins))
 
@@ -871,18 +874,21 @@ def mles_vs_time(agg_dict, descrip=None, sensor='qpd', axis_ind=0, t_bin_width=N
         plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
         # downsample the environmental data if requested
         if pem_sensors:
-            pem_data_t[:,:,i] = np.mean(pem_data[1:,:,i*t_bins:(i+1)*t_bins],axis=2)
+            start_pem_ind = np.argmin(np.abs(start_dt + timedelta(hours=hours[i*t_bins]) - pem_times))
+            end_pem_ind = np.argmin(np.abs(start_dt + timedelta(hours=hours[(i+1)*t_bins]) - pem_times))
+            pem_data_t[:,:,i] = np.mean(pem_data[1:,:,start_pem_ind:end_pem_ind],axis=2)
+            pem_times_t[i] = (pem_times[(start_pem_ind + end_pem_ind)//2] - start_dt).total_seconds()/3600.
 
     # plot the MLEs
-    colors = plt.get_cmap('rainbow',len(harm_freqs))
+    colors = plt.get_cmap('rainbow',alpha_hat_t.shape[1]//2 + 1)
     fig,ax = plt.subplots(num_plots, 1, figsize=(10, 3*num_plots + 2), sharex=True)
     for i in range(alpha_hat_t.shape[1]):
+        ind = 0
         if num_plots - 2*pem_sensors == 2:
             ind = int(i > alpha_hat_t.shape[1]//2)
-        else:
-            ind = 0
-        ax[ind].errorbar(plot_times,alpha_hat_t[:,i]/1e8,yerr=2.*err_alpha_t[:,i]/1e8,color=colors(i),ls='none',\
-                         alpha=0.65,ms=3,marker='o',label='{:.0f} Hz'.format(harm_freqs[i]))
+        ax[ind].errorbar(plot_times,alpha_hat_t[:,i]/1e8,yerr=2.*err_alpha_t[:,i]/1e8,\
+                         color=colors(i-ind*alpha_hat_t.shape[1]//2),ls='none',alpha=0.65,\
+                         ms=3,marker='o',label='{:.0f} Hz'.format(harm_freqs[i]))
     
     # add the legend for the MLEs
     for i in range(num_plots):
@@ -896,23 +902,24 @@ def mles_vs_time(agg_dict, descrip=None, sensor='qpd', axis_ind=0, t_bin_width=N
         
     # plot the environmental data if requested
     if pem_sensors:
+        pem_means = np.mean(pem_data_t, axis=-1, keepdims=True)
+        pem_data_t -= pem_means
         colors = plt.get_cmap('Paired',12)
         sensors = ['Fiber', 'Input', 'Output']
         axis_2 = ax[-2].twinx()
         for i in range(3):
-            ax[-2].plot(plot_times, pem_data_t[0,i,:], marker='s', ms=5, \
-                        color=colors(2*i), label=sensors[i]+' temperature')
-            axis_2.plot(plot_times, pem_data_t[1,i,:], marker='d', ms=5, \
-                        color=colors(2*i+1), label=sensors[i]+' rel. hum.')
-            ax[-1].plot(plot_times, pem_data_t[2,i,:], marker='o', ms=5, \
-                        color=colors(2*i), label=sensors[i]+' pressure')
+            ax[-2].plot(pem_times_t, pem_data_t[0,i,:], marker='s', ms=5, \
+                        color=colors(2*i), label=sensors[i]+' temp. -- {:.2f}'.format(pem_means[0,i,0]))
+            axis_2.plot(pem_times_t, pem_data_t[1,i,:], marker='d', ms=5, \
+                        color=colors(2*i+1), label=sensors[i]+' rel. hum. -- {:.2f}'.format(pem_means[1,i,0]))
+            ax[-1].plot(pem_times_t, pem_data_t[2,i,:], marker='o', ms=5, \
+                        color=colors(2*i), label=sensors[i]+' press.. -- {:.2f}'.format(pem_means[2,i,0]))
         ax[-2].set_ylabel('Temperature [$^\circ$C]')
         handles1, labels1 = ax[-2].get_legend_handles_labels()
         handles2, labels2 = axis_2.get_legend_handles_labels()
         handles = [item for pair in zip(handles1, handles2) for item in pair]
         labels = [item for pair in zip(labels1, labels2) for item in pair]
-        legend = axis_2.legend(handles, labels, ncol=3)
-        # legend.set_zorder(99)
+        axis_2.legend(handles, labels, ncol=3)
         axis_2.set_ylabel('Relative humidity [\%]')
         ax[-1].set_ylabel('Pressure [mbar]')
         ax[-1].legend(ncol=3)
