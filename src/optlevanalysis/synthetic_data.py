@@ -9,7 +9,7 @@ class SynthFile(FileData):
     to be made for an already-moving cantilever, use the argument noise_only=False when loading data.
     '''
 
-    def load_and_inject(self,alpha=1e7,lamb=10.,noise_only=True,cant_stroke=170.,**kwargs):
+    def load_and_inject(self,alpha=1e7,lamb=10.,add_drive=True,cant_stroke=170.,**kwargs):
         '''
         Loads the data in the same way as the usual FileData class with a couple steps changed to allow for the
         injection of synthetic signals.
@@ -23,14 +23,19 @@ class SynthFile(FileData):
         self.load_data(p0_bead=p0_bead,signal_model=None,mass_bead=mass_bead,lightweight=False,**kwargs)
 
         # add synthetic cantilever motion to the noise data so we get a non-trivial signal model
-        if noise_only:
+        if add_drive:
             cant_y = (cant_stroke/2.)*np.sin(2.*np.pi*3.*np.linspace(0,10,self.nsamp))
             self.cant_pos_calibrated = self.cant_pos_calibrated + np.array((np.zeros_like(cant_y),cant_y,np.zeros_like(cant_y)))
+            # record this file as potentially containing a real signal so the statistics code will use it
+            self.is_noise = False
 
         # make the synthetic signal using the modified cantilever data and the given alpha and lambda
         self.make_synthetic_signal(signal_model,p0_bead,mass_bead=mass_bead,alpha=alpha,lamb=lamb)
-        self.calibrate_bead_response(sensor='QPD',no_tf=True)
-        self.calibrate_bead_response(sensor='PSPD',no_tf=True)
+        # filters have already been applied so don't filter again
+        _ = kwargs.pop('wiener', [True]*5)
+        _ = kwargs.pop('time_domain', False)
+        self.calibrate_bead_response(sensor='QPD', no_tf=True, time_domain=False, wiener=[False]*5)
+        self.calibrate_bead_response(sensor='XYPD', no_tf=True, time_domain=False, wiener=[False]*5)
         self.xypd_force_calibrated[2,:] = np.copy(self.qpd_force_calibrated[2,:])
         self.get_ffts_and_noise(noise_bins=10)
         self.make_templates(signal_model,p0_bead,mass_bead=mass_bead)
@@ -120,16 +125,16 @@ class SynthAggregate(AggregateData):
         descrips = kwargs.pop('descrips',[])
         alpha = kwargs.pop('alpha',1e7)
         lamb = kwargs.pop('lamb',10.)
-        noise_only = kwargs.pop('noise_only',True)
+        add_drive = kwargs.pop('add_drive',True)
         super().__init__(data_dirs=data_dirs,file_prefixes=file_prefixes,descrips=descrips,**kwargs)
         self.alpha = alpha
         self.lamb = lamb
-        self.noise_only = noise_only
+        self.add_drive = add_drive
 
 
     def process_file(self,file_path,qpd_diag_mat=None,signal_model=None,ml_model=None,p0_bead=None,\
-                     mass_bead=0,harms=[],max_freq=500.,downsample=True,wiener=[False,True,False,False,False],\
-                     no_tf=False,lightweight=True):
+                     mass_bead=0,harms=[],max_freq=2500.,downsample=True,wiener=[False,True,False,False,False],\
+                     time_domain=False,no_tf=False,force_cal_factors=[],window=None,lightweight=True):
         '''
         Process data for an individual file and return the SynthFile object.
         '''
@@ -137,8 +142,8 @@ class SynthAggregate(AggregateData):
         try:
             this_file.load_and_inject(qpd_diag_mat=qpd_diag_mat,signal_model=signal_model,ml_model=ml_model,\
                                       p0_bead=p0_bead,mass_bead=mass_bead,harms=harms,downsample=downsample,wiener=wiener,\
-                                      max_freq=max_freq,no_tf=no_tf,lightweight=lightweight,alpha=self.alpha,lamb=self.lamb,\
-                                      noise_only=self.noise_only)
+                                      time_domain=time_domain,max_freq=max_freq,no_tf=no_tf,force_cal_factors=force_cal_factors,\
+                                      window=window,lightweight=lightweight,alpha=self.alpha,lamb=self.lamb,add_drive=self.add_drive)
         except Exception as e:
             this_file.is_bad = True
             this_file.error_log = repr(e)
