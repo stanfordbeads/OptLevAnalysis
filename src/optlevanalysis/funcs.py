@@ -2,19 +2,19 @@ import numpy as np
 from scipy.optimize import curve_fit
 import scipy.signal as sig
 
-'''
-Miscellaneous functions used for data reduction/calibration.
-'''
+"""Miscellaneous functions used for data reduction/calibration.
+"""
 
 def damped_osc_amp(f, A, f0, g):
-    '''Fitting function for AMPLITUDE of a damped harmonic oscillator
+    """Fitting function for AMPLITUDE of a damped harmonic oscillator
            INPUTS: f [Hz], frequency 
                    A, amplitude
                    f0 [Hz], resonant frequency
                    g [Hz], damping factor
                    c, constant offset, default 0
 
-           OUTPUTS: Lorentzian amplitude'''
+           OUTPUTS: Lorentzian amplitude
+    """
     w = 2. * np.pi * f
     w0 = 2. * np.pi * f0
     gamma = 2. * np.pi * g
@@ -22,17 +22,15 @@ def damped_osc_amp(f, A, f0, g):
     return A / denom
 
 
-
-
 def damped_osc_phase(f, A, f0, g, phase0 = 0.):
-    '''Fitting function for PHASE of a damped harmonic oscillator.
+    """Fitting function for PHASE of a damped harmonic oscillator.
        Includes an arbitrary DC phase to fit over out of phase responses
            INPUTS: f [Hz], frequency 
                    A, amplitude
                    f0 [Hz], resonant frequency
                    g [Hz], damping factor
 
-           OUTPUTS: Lorentzian amplitude'''
+           OUTPUTS: Lorentzian amplitude"""
     w = 2. * np.pi * f
     w0 = 2. * np.pi * f0
     gamma = 2. * np.pi * g
@@ -40,10 +38,9 @@ def damped_osc_phase(f, A, f0, g, phase0 = 0.):
     return 1.0 * np.arctan2(-w * gamma, w0**2 - w**2) + phase0
 
 
-
 def make_extrapolator(interpfunc, xs=[], ys=[], pts=(10, 10), order=(1,1), \
                       arb_power_law=(False, False), semilogx=False):
-    '''Make a functional object that does nth order polynomial extrapolation
+    """Make a functional object that does nth order polynomial extrapolation
        of a scipy.interpolate.interp1d object (should also work for other 1d
        interpolating objects).
 
@@ -54,7 +51,7 @@ def make_extrapolator(interpfunc, xs=[], ys=[], pts=(10, 10), order=(1,1), \
                             1st index for lower range, 2nd for upper
 
            OUTPUTS: extrapfunc, function object with extrapolation
-    '''
+    """
     
     if not len(xs) or not len(ys):
         try:
@@ -140,59 +137,51 @@ def line(x, a, b):
     return a * x + b
 
 def get_file_number(file_name):
-    '''
-    Returns the file number for sorting.
-    '''
+    """Returns the file number for sorting.
+    """
     return int((file_name.split('.h5')[-2]).split('_')[-1])
 
 def lor(x,x_0,gamma,A):
-    '''
-    Lorentzian function for fitting peaks.
-    '''
+    """Lorentzian function for fitting peaks.
+    """
     return A*gamma/((x-x_0)**2.+0.25*gamma**2.)
 
 def quadratic(x, a, b, c):
-    '''
-    Quadratic function in standard form
-    '''
+    """Quadratic function in standard form
+    """
     return a*x**2 + b*x + c
 
 def rayleigh(spectra):
-    '''
-    Compute the Rayleigh spectrum for a time series of data.
-    '''
+    """Computes the Rayleigh spectrum for a time series of data.
+    """
     stds = np.std(spectra,axis=0)
     means = np.mean(spectra,axis=0)
 
     return stds/means
 
 def noise_inds(agg_dict):
-    '''
-    Return the indices corresponding to noise-only files in the agg_dict.
-    '''
+    """Returns the indices corresponding to noise-only files in the agg_dict.
+    """
     return np.array([i[0] for i in np.argwhere(agg_dict['is_noise'])])
 
 def shaking_inds(agg_dict):
-    '''
-    Return the indices corresponding to files for which the attractor was shaking.
-    '''
+    """Returns the indices corresponding to files for which the attractor was shaking.
+    """
     return np.array([i[0] for i in np.argwhere(~agg_dict['is_noise'])])
 
 def gv_decimate(x, q, LPF, axis=-1):
-    '''
-    Implements same functionality as Scipy's decimate,
+    """Implements same functionality as Scipy's decimate,
     but with SOS filtering.
-    '''
+    """
     sl = [slice(None)] * x.ndim
     sl[axis] = slice(None, None, q)
     y = sig.sosfiltfilt(LPF, x)
     return y[tuple(sl)]
 
 def get_environmental_data(agg_dict):
-    """
-    Get the environmental data from the PEM sensors for a given aggregate data dictionary.
+    """Get the environmental data from the PEM sensors for a given aggregate data dictionary.
 
-    :agg_dict:                  aggregate data dictionary
+    :agg_dict: aggregate data dictionary
     """
     
     from datetime import datetime, timedelta
@@ -211,6 +200,8 @@ def get_environmental_data(agg_dict):
     while current_date <= end:
         date_list.append(current_date.strftime('%Y%m%d'))
         current_date += timedelta(days=1)
+
+    # add the data for one day later, unless it doesn't exist yet
     date_list.append(current_date.strftime('%Y%m%d'))
 
     # build paths to the PEM sensor data for each date
@@ -225,13 +216,16 @@ def get_environmental_data(agg_dict):
     pressures = [[] for _ in range(len(base_paths))]
     for i, paths in enumerate(base_paths):
         for path in paths:
-            with open(path, 'r') as f:
-                for line in f:
-                    line = line.split(',')
-                    datetimes[i].append(datetime.strptime(line[0], '%Y-%m-%d %H:%M:%S'))
-                    temps[i].append(float(line[1]))
-                    relhums[i].append(float(line[2]))
-                    pressures[i].append(float(line[3]))
+            try:
+                with open(path, 'r') as f:
+                    for line in f:
+                        line = line.split(',')
+                        datetimes[i].append(datetime.strptime(line[0], '%Y-%m-%d %H:%M:%S'))
+                        temps[i].append(float(line[1]))
+                        relhums[i].append(float(line[2]))
+                        pressures[i].append(float(line[3]))
+            except FileNotFoundError:
+                pass
 
     # build a numpy array to store the data
     temps_arr = np.array(temps)
