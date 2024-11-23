@@ -42,6 +42,8 @@ import optlevanalysis.signals as s
 
 
 class FileData:
+    """Class used to manage individual data files.
+    """
 
     def __init__(self,path=''):
         """Initializes a RawData object with some metadata attributes and a dict containing
@@ -64,6 +66,9 @@ class FileData:
         self.freqs = np.array(())
         self.cant_raw_data = np.array(((),(),()))
         self.quad_raw_data = np.array(((),(),()))
+        self.xypd_raw_data = np.array(((),(),()))
+        self.qpd_dc_offsets = np.array(())
+        self.xypd_dc_offsets = np.array(())
         self.quad_amps = np.array(((),(),(),(),()))
         self.quad_phases = np.array(((),(),(),(),()))
         self.cant_pos_calibrated = np.array(((),(),()))
@@ -82,6 +87,7 @@ class FileData:
         self.xypd_sb_ffts = np.array(((),(),()))
         self.template_ffts = np.array(())
         self.template_params = np.array(())
+        self.motion_likeness = np.array(((),))
         self.cant_fft = np.array(())
         self.force_cal_factors_qpd = np.array([0,0,0])
         self.force_cal_factors_xypd = np.array([0,0,0])
@@ -99,7 +105,7 @@ class FileData:
                   harms=[],width=0,noise_bins=10,qpd_diag_mat=None,downsample=True,\
                   wiener=[False,True,False,False,False],time_domain=False,cant_drive_freq=3.0,\
                   signal_model=None,ml_model=None,p0_bead=None,mass_bead=0,lightweight=False,\
-                  no_tf=False,force_cal_factors=[]):
+                  no_tf=False,force_cal_factors=[],window=None):
         """Applies calibrations to the cantilever data and QPD data, then gets FFTs for both.
 
         :param tf_path: Path to the HDF5 file containing the transfer function data and fits, defaults to None
@@ -149,6 +155,8 @@ class FileData:
             self.diagonalize_qpd = True
         self.get_xyz_from_quad()
         self.xypd_raw_data = self.data_dict['xypd_data']
+        self.qpd_dc_offsets = np.mean(self.quad_raw_data, axis=-1)
+        self.xypd_dc_offsets = np.mean(self.xypd_raw_data, axis=-1)
         self.cant_raw_data = self.data_dict['cant_data']
         self.nsamp = len(self.times)
         self.window_s1 = np.copy(self.nsamp)
@@ -157,7 +165,7 @@ class FileData:
         freqs = np.fft.rfftfreq(self.nsamp, d=1.0/self.fsamp)
         self.freqs = freqs[freqs<=max_freq]
         if downsample:
-            self.downsample_raw_data(wiener, time_domain)
+            self.downsample_raw_data(wiener, time_domain, window)
         self.calibrate_stage_position()
         self.calibrate_bead_response(tf_path=tf_path,sensor='QPD',cal_drive_freq=cal_drive_freq,no_tf=no_tf,\
                                      force_cal_factors=force_cal_factors,time_domain=time_domain,wiener=wiener)
@@ -167,7 +175,8 @@ class FileData:
         self.get_boolean_cant_mask(num_harmonics=num_harmonics,harms=harms,\
                                    cant_drive_freq=cant_drive_freq,width=width)
         self.get_ffts_and_noise(noise_bins=noise_bins)
-        self.get_motion_likeness(ml_model=ml_model)
+        if ml_model is not None:
+            self.get_motion_likeness(ml_model=ml_model)
         if signal_model is not None:
             self.make_templates(signal_model,p0_bead,mass_bead=mass_bead)
         # for use with AggregateData, don't carry around all the raw data
@@ -341,8 +350,8 @@ class FileData:
 
         # check for scrambling of timestamps, and raise an exception if found
         timesteps = np.diff(quad_times)*1e-9
-        # if np.sum(timesteps > 2.0/self.fsamp):
-        #     raise Exception('Error: timestamps scrambed in '+self.file_name)
+        if np.sum(timesteps > 1e2/self.fsamp)>10:
+            raise Exception('Error: timestamps scrambed in '+self.file_name)
 
         # store the raw QPD data so it can be used to diagonalize the x/y responses
         self.quad_amps = np.array(amps)
@@ -388,17 +397,18 @@ class FileData:
         xy_vec = np.matmul(self.qpd_diag_mat,amps[:4,:])
         x = xy_vec[0,:]
         y = xy_vec[1,:]
-        n = np.sqrt(xy_vec[2,:]**2 + xy_vec[3,:]**2)
+        n1 = xy_vec[2,:]
+        n2 = xy_vec[3,:]
 
         # total light to normalize by
         quad_sum = np.sum(amps[:4,:],axis=0)
 
         # set object attribute with a numpy array of x,y,z
         self.quad_raw_data = np.array([x.astype(np.float64)/quad_sum,y.astype(np.float64)/quad_sum,phases[4]])
-        self.quad_null = n.astype(np.float64)/quad_sum
+        self.quad_null = np.array([n1.astype(np.float64)/quad_sum, n2.astype(np.float64)/quad_sum])
 
 
-    def downsample_raw_data(self,wiener=[False,True,False,False,False],time_domain=False):
+    def downsample_raw_data(self,wiener=[False,True,False,False,False],time_domain=False,window=None):
         """Downsamples the time series for all sensors, then use a pre-trained Wiener filter to subtract
         coherent noise coupling in from the table. Input `wiener` is a list of bools which specifies
         whether to subtract coherent accelerometer z noise from [QPD x, QPD y, z, XYPD x, XYPD y]
@@ -416,7 +426,7 @@ class FileData:
 
         # get arrays of the raw time series
         qpd_x,qpd_y,qpd_z = tuple(self.quad_raw_data)
-        qpd_n = self.quad_null
+        qpd_n1, qpd_n2 = tuple(self.quad_null)
         xypd_x,xypd_y,_ = tuple(self.xypd_raw_data)
         accel_x,accel_y,accel_z = tuple(self.accelerometer)
         mic_1 = self.microphone[0]
@@ -426,7 +436,8 @@ class FileData:
         qpd_x -= np.mean(qpd_x)
         qpd_y -= np.mean(qpd_y)
         qpd_z -= np.mean(qpd_z)
-        qpd_n -= np.mean(qpd_n)
+        qpd_n1 -= np.mean(qpd_n1)
+        qpd_n2 -= np.mean(qpd_n2)
         xypd_x -= np.mean(xypd_x)
         xypd_y -= np.mean(xypd_y)
         accel_x -= np.mean(accel_x)
@@ -441,7 +452,8 @@ class FileData:
         qpd_x_lpf = gv_decimate(qpd_x, ds_factor, LPF)
         qpd_y_lpf = gv_decimate(qpd_y, ds_factor, LPF)
         qpd_z_lpf = gv_decimate(qpd_z, ds_factor, LPF)
-        qpd_n_lpf = gv_decimate(qpd_n, ds_factor, LPF)
+        qpd_n1_lpf = gv_decimate(qpd_n1, ds_factor, LPF)
+        qpd_n2_lpf = gv_decimate(qpd_n2, ds_factor, LPF)
         xypd_x_lpf = gv_decimate(xypd_x,ds_factor, LPF)
         xypd_y_lpf = gv_decimate(xypd_y, ds_factor, LPF)
         cant_x_lpf = gv_decimate(cant_x-mean_cant_x, ds_factor, LPF) + mean_cant_x
@@ -474,13 +486,17 @@ class FileData:
 
         # window the data to remove transient artifacts from filtering
         # but not the cantilever data as force(window(cant_position))=/=window(force(cant_position))
-        win = sig.get_window(('tukey',0.05), len(qpd_x_w))
+        if window is None:
+            win = sig.get_window(('tukey',0.05), len(qpd_x_w))
+        else:
+            win = sig.get_window(window, len(qpd_x_w))
         self.window_s1 = np.sum(win)
         self.window_s2 = np.sum(win**2)
         qpd_x_w *= win
         qpd_y_w *= win
         qpd_z_w *= win
-        qpd_n_w = qpd_n_lpf*win
+        qpd_n1_w = qpd_n1_lpf*win
+        qpd_n2_w = qpd_n2_lpf*win
         xypd_x_w *= win
         xypd_y_w *= win
         accel_lpf *= win
@@ -488,7 +504,7 @@ class FileData:
 
         # replace existing class attributes with filtered data
         self.quad_raw_data = np.array((qpd_x_w, qpd_y_w, qpd_z_w))
-        self.quad_null = qpd_n_w
+        self.quad_null = np.array((qpd_n1_w, qpd_n2_w))
         self.xypd_raw_data = np.array((xypd_x_w, xypd_y_w, qpd_z_w))
         self.accelerometer = accel_lpf
         self.microphone = np.array((mic_1_lpf,))
@@ -645,8 +661,8 @@ class FileData:
         if sensor=='QPD':
             raw_data = self.quad_raw_data
             self.force_cal_factors_qpd = force_cal_factors
-            null_raw = self.quad_null - np.mean(self.quad_null)
-            null_fft = np.fft.rfft(null_raw)[:len(self.freqs)]
+            null_raw = self.quad_null - np.mean(self.quad_null, axis=-1, keepdims=True)
+            null_fft = np.fft.rfft(null_raw, axis=-1)[:,:len(self.freqs)]
         elif sensor=='XYPD':
             raw_data = self.xypd_raw_data
             self.force_cal_factors_xypd = force_cal_factors
@@ -677,11 +693,14 @@ class FileData:
         # set calibrated time series and ffts as class attributes
         if sensor=='QPD':
             self.qpd_force_calibrated = bead_force_cal
-            calibrated_fft = np.append(calibrated_fft,force_cal_factors[0]*null_fft[np.newaxis,:],axis=0)
+            calibrated_fft = np.append(calibrated_fft,np.repeat(force_cal_factors[0],1)*null_fft,axis=0)
             self.qpd_ffts_full = calibrated_fft*norm_factor
+            self.qpd_dc_offsets *= self.force_cal_factors_qpd
         elif sensor=='XYPD':
             self.xypd_force_calibrated = bead_force_cal
             self.xypd_ffts_full = calibrated_fft*norm_factor
+            self.xypd_dc_offsets *= self.force_cal_factors_xypd
+            self.xypd_dc_offsets[-1] = self.qpd_dc_offsets[-1]/self.force_cal_factors_qpd[-1]
 
 
     def filter_freq_domain(self, sensor_ffts, sensor='QPD', wiener=[False,True,False,False,False]):
@@ -715,10 +734,11 @@ class FileData:
                        '/wienerFilters.h5') as filter_file:
             for i, chan in enumerate(sensor_channels):
                 if skip[i]: continue
-                # if sensor_channels[i]=='zpd':
-                #     print('filtering z')
                 filters = [filter_file[which_filters][w + '_' + chan] for w in witness_channels]
                 filters = np.array(filters)
+                if filters.shape[-1] != witness_ffts.shape[-1]:
+                    filters = np.pad(filters, ((0, 0), (0, witness_ffts.shape[-1] - filters.shape[-1])),\
+                                     mode='constant', constant_values=0)
                 preds = witness_ffts * filters
                 preds = np.sum(preds, axis=0)
                 sensor_ffts[i] -= preds
@@ -726,7 +746,7 @@ class FileData:
         return sensor_ffts
 
 
-    def tf_array_fitted(self,freqs,sensor,tf_path=None,diagonalize_qpd=False):
+    def tf_array_fitted(self,freqs,sensor,tf_path=None,diagonalize_qpd=False,qpd_phase=False):
         """Gets the transfer function array from the HDF5 file containing the fitted poles,
         zeros, and gain from the measured transfer functions along x, y, and z, and returns it.
 
@@ -1132,11 +1152,11 @@ class FileData:
 
 
 class AggregateData:
-    """_summary_
+    """Class used to manage collections of data files.
     """
 
-    def __init__(self,data_dirs=[],file_prefixes=[],descrips=[],num_to_load=1000000,\
-                 first_index=0,configs=None):
+    def __init__(self, data_dirs=[], file_prefixes=[], descrips=[], num_to_load=1000000,\
+                 first_index=0, configs=None, file_suffixes=[]):
         """Takes a list of directories containing the files to be aggregated, and optionally
         a list of file prefixes. If given, the list of file prefixes should be the same length as
         the list of data directories. If files with multiple prefixes are required from the same
@@ -1186,6 +1206,15 @@ class AggregateData:
                 if len(configs) != len(data_dirs):
                     raise Exception('Error: length of data_dirs and configs do not match. ')
         self.configs = configs
+        if len(file_suffixes)>0:
+            if not isinstance(file_suffixes[0], str):
+                if len(file_suffixes[0]) != len(data_dirs):
+                    raise Exception('Error: length of data_dirs and file_suffixes do not match.')
+            else:
+                file_suffixes = [file_suffixes]*len(data_dirs)
+        else:
+            file_suffixes = [file_suffixes]*len(data_dirs)
+        self.file_suffixes = file_suffixes
         # anything added here should be properly handled in merge_objects() and load_from_hdf5()
         self.num_to_load = np.array(num_to_load)
         self.num_files = np.array([])
@@ -1262,7 +1291,8 @@ class AggregateData:
             files = os.listdir(str(dir))
             # only add files, not folders, and ensure they end with .h5 and have the correct prefix
             files = [str(dir)+'/'+f for f in files if (os.path.isfile(str(dir)+'/'+f) and \
-                     (self.file_prefixes[i] in f and f.endswith('.h5')))]
+                     (self.file_prefixes[i] in f and f.endswith('.h5') and \
+                     ((f[len(self.file_prefixes[i]):-3] in self.file_suffixes[i]) or len(self.file_suffixes[i])==0)))]
             files.sort(key=get_file_number)
             files = files[self.first_index:]
             num_to_load = min(self.num_to_load[i],len(files))
@@ -1283,7 +1313,7 @@ class AggregateData:
     def load_file_data(self,num_cores=30,diagonalize_qpd=False,load_templates=False,harms=[],\
                        max_freq=500.,downsample=True,wiener=[False,True,False,False,False],\
                        time_domain=False,no_tf=False,force_cal_factors=[],no_config=False,\
-                       ml_model=None,lightweight=True):
+                       ml_model=None,window=None,lightweight=True):
         """Creates a FileData object for each of the files in the file list and loads
         in the relevant data for physics analysis.
 
@@ -1328,8 +1358,10 @@ class AggregateData:
         file_data_objs = Parallel(n_jobs=num_cores)(delayed(self.process_file)\
                                                     (file_path,qpd_diag_mats[self.bin_indices[i,4]],\
                                                      signal_models[self.bin_indices[i,0]],ml_model,\
-                                                     self.p0_bead[self.bin_indices[i,2]],self.mass_bead[self.bin_indices[i,1]],\
-                                                     harms,max_freq,downsample,wiener,time_domain,no_tf,force_cal_factors,lightweight) \
+                                                     self.p0_bead[self.bin_indices[i,2]],\
+                                                     self.mass_bead[self.bin_indices[i,1]],\
+                                                     harms,max_freq,downsample,wiener,time_domain,\
+                                                     no_tf,force_cal_factors,window,lightweight) \
                                                      for i,file_path in enumerate(tqdm(self.file_list)))
         # record which files are bad and save the error logs
         error_logs = []
@@ -1344,6 +1376,7 @@ class AggregateData:
         self.file_data_objs = file_data_objs
         self.bad_files = np.array(bad_files)
         self.error_logs = np.array(error_logs)
+        self.file_suffixes = np.array([[]*len(self.data_dirs)])
         # edit the number of files per directory to account for bad files
         for i in range(len(self.bad_files)):
             root_dir = '/'.join(self.bad_files[i].split('/')[:-1])
@@ -1370,7 +1403,7 @@ class AggregateData:
         self.lightweight = lightweight
 
 
-    def load_yukawa_model(self,lambda_range=[1e-6,1e-4],num_lambdas=None):
+    def load_yukawa_model(self,lambda_range=[1e-6,1e-4],num_lambdas=None,attractor='gold'):
         """Loads functions used to make Yukawa-modified gravity templates
 
         :param lambda_range: Range of lambda values in meters, defaults to [1e-6,1e-4]
@@ -1379,23 +1412,27 @@ class AggregateData:
         :type num_lambdas: int, optional
         """
         self.__get_file_list()
+        suffix = 'master' if attractor=='gold' else 'ptblack'
         signal_models = []
         for diam in self.diam_bead:
             if str(diam)[0]=='7':
-                signal_models.append(s.GravFuncs('/home/gautam/gravityData/7_6um-gbead_1um-unit-cells_master/'))
+                signal_path = '/data/new_trap_processed/signal_templates/' + attractor + \
+                              '_attractor/7_6um-gbead_1um-unit-cells_' + suffix + '/'
             elif str(diam)[0]=='1':
-                signal_models.append(s.GravFuncs('/home/gautam/gravityData/10um-gbead_1um-unit-cells_master/'))
+                signal_path = '/data/new_trap_processed/signal_templates/' + attractor + \
+                              '_attractor/10um-gbead_1um-unit-cells_' + suffix + '/'
             else:
-                print('Error: no signal model availabe for bead diameter {} um'.format(diam))
+                print('Error: no signal model availabe for bead diameter {} um and {} attractor.'.format(diam, attractor))
                 break
+            signal_models.append(s.GravFuncs(signal_path))
             signal_models[-1].load_force_funcs(lambda_range=lambda_range,num_lambdas=num_lambdas)
-            print('Yukawa-modified gravity signal model loaded for {} um bead.'.format(diam))
+            print('Yukawa-modified gravity signal model loaded for {} um bead and {} attractor.'.format(diam, attractor))
         self.signal_models = signal_models
         
 
     def process_file(self,file_path,qpd_diag_mat=None,signal_model=None,ml_model=None,p0_bead=None,\
                      mass_bead=0,harms=[],max_freq=2500.,downsample=True,wiener=[False,True,False,False,False],\
-                     time_domain=False,no_tf=False,force_cal_factors=[],lightweight=True):
+                     time_domain=False,no_tf=False,force_cal_factors=[],window=None,lightweight=True):
         """Processes data for an individual file and returns the FileData object.
 
         :param file_path: Path to the raw HDF5 file to be loaded
@@ -1431,7 +1468,7 @@ class AggregateData:
             this_file.load_data(qpd_diag_mat=qpd_diag_mat,signal_model=signal_model,ml_model=ml_model,\
                                 p0_bead=p0_bead,mass_bead=mass_bead,harms=harms,downsample=downsample,wiener=wiener,\
                                 time_domain=time_domain,max_freq=max_freq,no_tf=no_tf,force_cal_factors=force_cal_factors,\
-                                lightweight=lightweight)
+                                window=window,lightweight=lightweight)
         except Exception as e:
             this_file.is_bad = True
             this_file.error_log = repr(e)
@@ -1462,6 +1499,7 @@ class AggregateData:
         times = []
         timestamp = []
         accelerometer = []
+        microphones = []
         bead_height = []
         mean_laser_power = []
         laser_power_full = []
@@ -1474,8 +1512,10 @@ class AggregateData:
         qpd_ffts = []
         qpd_ffts_full = []
         qpd_sb_ffts = []
+        qpd_dc_offsets = []
         xypd_ffts = []
         xypd_ffts_full = []
+        xypd_dc_offsets = []
         xypd_sb_ffts = []
         template_ffts = []
         template_params = []
@@ -1491,6 +1531,7 @@ class AggregateData:
             timestamp.append(f.times[0]*1e-9)
             times.append(f.times)
             accelerometer.append(f.accelerometer)
+            microphones.append(f.microphone)
             bead_height.append(f.bead_height)
             mean_laser_power.append(f.mean_laser_power)
             laser_power_full.append(f.laser_power_full)
@@ -1503,9 +1544,11 @@ class AggregateData:
             qpd_ffts.append(f.qpd_ffts)
             qpd_ffts_full.append(f.qpd_ffts_full)
             qpd_sb_ffts.append(f.qpd_sb_ffts)
+            qpd_dc_offsets.append(f.qpd_dc_offsets)
             xypd_ffts.append(f.xypd_ffts)
             xypd_ffts_full.append(f.xypd_ffts_full)
             xypd_sb_ffts.append(f.xypd_sb_ffts)
+            xypd_dc_offsets.append(f.xypd_dc_offsets)
             template_ffts.append(f.template_ffts)
             template_params.append(f.template_params)
             cant_fft.append(f.cant_fft)
@@ -1530,6 +1573,7 @@ class AggregateData:
         times = np.array(times)
         timestamp = np.array(timestamp)
         accelerometer = np.array(accelerometer)
+        microphones = np.array(microphones)
         bead_height = np.array(bead_height)
         mean_laser_power = np.array(mean_laser_power)
         laser_power_full = np.array(laser_power_full)
@@ -1542,9 +1586,11 @@ class AggregateData:
         qpd_ffts = np.array(qpd_ffts)
         qpd_ffts_full = np.array(qpd_ffts_full)
         qpd_sb_ffts = np.array(qpd_sb_ffts)
+        qpd_dc_offsets = np.array(qpd_dc_offsets)
         xypd_ffts = np.array(xypd_ffts)
         xypd_ffts_full = np.array(xypd_ffts_full)
         xypd_sb_ffts = np.array(xypd_sb_ffts)
+        xypd_dc_offsets = np.array(xypd_dc_offsets)
         template_ffts = np.array(template_ffts)
         template_params = np.array(template_params)
         cant_fft = np.array(cant_fft)
@@ -1559,6 +1605,7 @@ class AggregateData:
         agg_dict['times'] = times
         agg_dict['timestamp'] = timestamp
         agg_dict['accelerometer'] = accelerometer
+        agg_dict['microphones'] = microphones
         agg_dict['bead_height'] = bead_height
         agg_dict['mean_laser_power'] = mean_laser_power
         agg_dict['laser_power_full'] = laser_power_full
@@ -1571,9 +1618,11 @@ class AggregateData:
         agg_dict['qpd_ffts'] = qpd_ffts
         agg_dict['qpd_ffts_full'] = qpd_ffts_full
         agg_dict['qpd_sb_ffts'] = qpd_sb_ffts
+        agg_dict['qpd_dc_offsets'] = qpd_dc_offsets
         agg_dict['xypd_ffts'] = xypd_ffts
         agg_dict['xypd_ffts_full'] = xypd_ffts_full
         agg_dict['xypd_sb_ffts'] = xypd_sb_ffts
+        agg_dict['xypd_dc_offsets'] = xypd_dc_offsets
         agg_dict['template_ffts'] = template_ffts
         agg_dict['template_params'] = template_params
         agg_dict['cant_fft'] = cant_fft
@@ -1977,9 +2026,9 @@ class AggregateData:
 
         print('Subtracting coherent portion of accelerometer noise from QPD data...')
 
-        # if self.noise_subtracted:
-        #     print('Error: coherent noise already subtracted from the QPD data!')
-        #     return
+        if self.noise_subtracted:
+            print('Error: coherent noise already subtracted from the QPD data!')
+            return
         
         if file_inds is None:
             file_inds = list(range(self.bin_indices.shape[0]))
@@ -2317,6 +2366,7 @@ class AggregateData:
             self.noise_subtracted = object1.noise_subtracted
             self.data_dirs = np.array(list(object1.data_dirs) + list(object2.data_dirs))
             self.file_prefixes = np.array(list(object1.file_prefixes) + list(object2.file_prefixes))
+            self.file_suffixes = np.array(list(object1.file_suffixes) + list(object2.file_suffixes))
             self.descrips = np.array(list(object1.descrips) + list(object2.descrips))
             self.num_to_load = np.array(list(object1.num_to_load) + list(object2.num_to_load))
             self.num_files = np.array(list(object1.num_files) + list(object2.num_files))
@@ -2444,6 +2494,7 @@ class AggregateData:
             self.configs = np.array([ast.literal_eval(conf) for conf in confs])
             self.data_dirs = np.array(f['run_params/data_dirs'],dtype=np.str_)
             self.file_prefixes = np.array(f['run_params/file_prefixes'],dtype=np.str_)
+            self.file_suffixes = np.array(f['run_params/file_suffixes'],dtype=np.str_)
             self.descrips = np.array(f['run_params/descrips'],dtype=np.str_)
             self.file_list = np.array(f['run_params/file_list'],dtype=np.str_)
             self.bad_files = np.array(f['run_params/bad_files'],dtype=np.str_)
