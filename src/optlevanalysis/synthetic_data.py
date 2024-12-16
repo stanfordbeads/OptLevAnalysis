@@ -1,19 +1,17 @@
 import numpy as np
-from optlevanalysis.data_processing import FileData,AggregateData
+from optlevanalysis.data_processing import FileData, AggregateData
 
 class SynthFile(FileData):
-    '''
-    This child class of FileData inherits most of the methods but overrides a couple to allow for a time series
+    """This child class of FileData inherits most of the methods but overrides a couple to allow for a time series
     of forces from a Yukawa-like interaction to be added to the time series. By default, it assumes that data
     being loaded is noise and therefore adds a sine wave to the cantilever y motion. If the synthetic signal is
     to be made for an already-moving cantilever, use the argument noise_only=False when loading data.
-    '''
+    """
 
     def load_and_inject(self,alpha=1e7,lamb=10.,add_drive=True,cant_stroke=170.,**kwargs):
-        '''
-        Loads the data in the same way as the usual FileData class with a couple steps changed to allow for the
+        """Loads the data in the same way as the usual FileData class with a couple steps changed to allow for the
         injection of synthetic signals.
-        '''
+        """
 
         # set aside the lightweight argument for later and remove it from the arguments passed to load_data()
         lightweight = kwargs.pop('lightweight',False)
@@ -46,9 +44,8 @@ class SynthFile(FileData):
 
 
     def make_synthetic_signal(self,signal_model,p0_bead,mass_bead=0,cant_vec=None,num_harms=10,alpha=1e7,lamb=10.):
-        '''
-        Get a signal template, scale it by the alpha provided, and add it to the raw time series.
-        '''
+        """Gets a signal template, scales it by the alpha provided, and adds it to the raw time series.
+        """
 
         # mass_bead argument should be in picograms. If no bead mass provided,
         # use the nominal mass from the template
@@ -108,15 +105,13 @@ class SynthFile(FileData):
 
 
 class SynthAggregate(AggregateData):
-    '''
-    This child class of AggregateData inherits most of the methods but override the file loading
+    """This child class of AggregateData inherits most of the methods but override the file loading
     to allow for synthetic signals to be added as the files are loaded.
-    '''
+    """
 
     def __init__(self,*args,**kwargs):
-        '''
-        Usual __init__ function but also defines the alpha and lambda used to create the synthetic signal.
-        '''
+        """Usual __init__ function but also defines the alpha and lambda used to create the synthetic signal.
+        """
         keys = ['data_dirs','file_prefixes','descrips']
         for i,arg in enumerate(args):
             kwargs[keys[i]] = arg
@@ -135,9 +130,8 @@ class SynthAggregate(AggregateData):
     def process_file(self,file_path,qpd_diag_mat=None,signal_model=None,ml_model=None,p0_bead=None,\
                      mass_bead=0,harms=[],max_freq=2500.,downsample=True,wiener=[False,True,False,False,False],\
                      time_domain=False,no_tf=False,force_cal_factors=[],window=None,lightweight=True):
-        '''
-        Process data for an individual file and return the SynthFile object.
-        '''
+        """Process data for an individual file and return the SynthFile object.
+        """
         this_file = SynthFile(file_path)
         try:
             this_file.load_and_inject(qpd_diag_mat=qpd_diag_mat,signal_model=signal_model,ml_model=ml_model,\
