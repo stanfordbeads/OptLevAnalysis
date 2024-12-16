@@ -154,7 +154,7 @@ def combine_likelihoods_over_dim(likelihood_coeffs, which='file'):
 
     # for quadratic log-likelihoods, just add coefficients and calculate
     # minimum analytically
-    coeffs = np.sum(likelihood_coeffs,axis=axis)
+    coeffs = np.sum(likelihood_coeffs, axis=axis)
     coeffs[...,-1] = -coeffs[...,1]/(2.*coeffs[...,0])
     return coeffs
 
@@ -330,7 +330,7 @@ def _get_grouped_harms(param_dist, alpha_dist, harm_combs):
 
 
 def group_likelihoods_by_parameter(likelihood_coeffs, num_harms=6, which='chi2', \
-                                  template_ffts=None, num_cores=1):
+                                   template_ffts=None, num_cores=1):
     """Reduce the likelihoods array to only contain the harmonics that look most signal-like
     in both positive and negative alpha. The harmonics are selected based on either minimizing
     chi-squared or maximizing signal power.
@@ -364,7 +364,7 @@ def group_likelihoods_by_parameter(likelihood_coeffs, num_harms=6, which='chi2',
     pos_harm_coeffs = combine_likelihoods_over_dim(likelihood_coeffs[pos_harm_idx, lambda_idx], which='all')
     neg_harm_coeffs = combine_likelihoods_over_dim(likelihood_coeffs[neg_harm_idx, lambda_idx], which='all')
 
-    return pos_harm_coeffs, neg_harm_coeffs
+    return pos_harm_coeffs, neg_harm_coeffs, pos_inds[0], neg_inds[0]
 
 
 def add_systematic_uncertainty(likelihood_coeffs, sigma_sys):
@@ -375,7 +375,7 @@ def add_systematic_uncertainty(likelihood_coeffs, sigma_sys):
     :param likelihood_coeffs: The array of negative log-likelihood coefficients.
     :type likelihood_coeffs: numpy.ndarray
     :param sigma_sys: The fractional systematic uncertainty to apply.
-    :type sigma_sys: float
+    :type sigma_sys: float or numpy.ndarray
     :return: Array of modified NLL coefficients with systematic uncertainties included.
     :rtype: numpy.ndarray
     """
