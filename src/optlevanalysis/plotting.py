@@ -906,7 +906,7 @@ def time_evolution(agg_dict,descrip=None,sensor='qpd',axis_ind=0,\
     return fig,ax
 
 
-def position_drift(agg_dict,descrip=None,t_bin_width=None):
+def position_drift(agg_dict, descrip=None, t_bin_width=None, pem_sensors=False):
     '''
     Plot the drift over time in the position of the bead and cantilever,
     along with the laser and transmitted power.
@@ -923,6 +923,7 @@ def position_drift(agg_dict,descrip=None,t_bin_width=None):
     bh = agg_dict['bead_height']
     cx = agg_dict['mean_cant_pos'][:,0]
     cz = agg_dict['mean_cant_pos'][:,2]
+    hz = agg_dict['xypd_dc_offsets'][:,2]*1.064*3.05175781e-05/2./np.pi
     x0 = cx[0]
     z0 = cz[0]
     cx = cx - x0
@@ -942,6 +943,7 @@ def position_drift(agg_dict,descrip=None,t_bin_width=None):
     bh_t = np.zeros((num_t_bins))
     cx_t = np.zeros((num_t_bins))
     cz_t = np.zeros((num_t_bins))
+    hz_t = np.zeros((num_t_bins))
     plot_times = np.zeros(num_t_bins)
 
     for i in range(num_t_bins):
@@ -950,30 +952,58 @@ def position_drift(agg_dict,descrip=None,t_bin_width=None):
         bh_t[i] = np.mean(bh[i*t_bins:(i+1)*t_bins])
         cx_t[i] = np.mean(cx[i*t_bins:(i+1)*t_bins])
         cz_t[i] = np.mean(cz[i*t_bins:(i+1)*t_bins])
+        hz_t[i] = np.mean(hz[i*t_bins:(i+1)*t_bins])
         plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
+
+    # get the PEM data
+    if pem_sensors:
+        pem_data = get_environmental_data(agg_dict)
+        pem_times = pem_data[0,0,:]
+        pem_timestamps = [datetime.timestamp(dt) for dt in pem_times]
+        pem_interp = np.zeros((pem_data.shape[0]-1, pem_data.shape[1], len(plot_times)))
+        for i in range(pem_interp.shape[0]):
+            for j in range(pem_interp.shape[1]):
+                pem_interp[i,j,:] = np.interp(plot_times*3600. + times[0,0]*1e-9, pem_timestamps, \
+                                              np.array(pem_data[i+1,j,:], dtype=float))
+        sensors = ['Fiber', 'Input', 'Output']
 
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
-    fig,ax = plt.subplots(2,2,figsize=(10,8),sharex=True,sharey='row')
-    l1 = ax[0,0].plot(plot_times,lp_t*1e3,color=colors[0],alpha=0.65,label='Laser power')
-    l2 = ax[0,0].plot(plot_times,pt_t*40e3,color=colors[1],alpha=0.65,label='Trans. power ($\\times 40$)')
-    ax[0,0].set_title('Time evolution of parameters for '+descrip)
-    ax[0,0].set_ylabel('Power [$\mu$W]')
-    ax2 = ax[0,0].twinx()
-    l3 = ax2.plot(plot_times,bh_t*1e3,color=colors[2],ls='-.',label='Bead height')
-    ls = l1+l2+l3
-    labs = [l.get_label() for l in ls]
-    ax2.set_ylabel('Bead height [nm]',rotation=270,labelpad=16)
-    ax[0,0].grid(which='both')
-    ax2.legend(ls,labs)
+    fig,ax = plt.subplots(3 + 2*int(pem_sensors), 1, figsize=(8, 11 + 6*int(pem_sensors)), sharex=True)
+    p_ratio = np.mean(lp_t)/np.mean(pt_t)
+    ax[0].plot(plot_times,lp_t*1e3,color=colors[0],alpha=0.65,label='Laser power')
+    ax[0].plot(plot_times,pt_t*1e3*p_ratio,color=colors[1],alpha=0.65,\
+                 label='Trans. power $\\times~{:.1f}$'.format(p_ratio))
+    ax[0].set_ylabel('Power [$\mu$W]')
+    ax[0].grid(which='both')
+    ax[0].legend(fontsize=14)
 
-    ax[1,0].plot(plot_times,cx_t,label='Cant. $x~-$ {:.1f} $\mu$m'.format(x0))
-    ax[1,0].plot(plot_times,cz_t,label='Cant. $z~-$ {:.1f} $\mu$m'.format(z0))
-    ax[1,0].set_ylabel('Cantilever position drift [$\mu$m]')
-    ax[1,0].set_xlabel('Time since '+start_date+' [hours]')
-    ax[1,0].set_xlim([min(plot_times),max(plot_times)])
-    ax[1,0].grid(which='both')
-    ax[1,0].legend()
+    ax[1].plot(plot_times, bh_t, label='Bead height')
+    mean_het_z = np.mean(hz_t)
+    label = 'Het $z' + ['-', '+'][int(mean_het_z>0)] + '{:.3f}~\mu$m'.format(np.abs(np.mean(hz_t)))
+    ax[1].plot(plot_times, hz_t - np.mean(hz_t), color=colors[1], label=label)
+    ax[1].set_ylabel('Bead height [$\mu$m]')
+    ax[1].legend(fontsize=14)
+
+    if pem_sensors:
+        for i in range(2):
+            for j in range(3):
+                ax[2+i].plot(plot_times, pem_interp[i+1,j,:], label=sensors[j])
+        ax[2].set_ylabel('Rel. humidity [\%]')
+        ax[2].legend(fontsize=14)
+        ax[3].set_ylabel('Pressure [mbar]')
+        ax[3].legend(fontsize=14)
+
+    ax[2+2*int(pem_sensors)].plot(plot_times,cx_t,label='Cant. $x~-$ {:.1f} $\mu$m'.format(x0))
+    ax[2+2*int(pem_sensors)].plot(plot_times,cz_t,label='Cant. $z~-$ {:.1f} $\mu$m'.format(z0))
+    ax[2+2*int(pem_sensors)].set_ylabel('Cantilever position [$\mu$m]')
+    ax[2+2*int(pem_sensors)].grid(which='both')
+    ax[2+2*int(pem_sensors)].legend(fontsize=14)
+
+    ax[-1].set_xlabel('Time since '+start_date+' [hours]')
+    ax[-1].set_xlim([min(plot_times),max(plot_times)])
+
+    fig.suptitle('Parameter drifts for ' + descrip)
 
     del lp,pt,bh,cx,cz,lp_t,pt_t,bh_t,cx_t,cz_t,times,plot_times,av_times,\
         start_date,hours,delta_t,num_t_bins,colors
@@ -1042,7 +1072,7 @@ def mles_vs_time(agg_dict, descrip=None, sensor='qpd', axis_ind=0, t_bin_width=N
 
     # plot the MLEs
     colors = plt.get_cmap('rainbow',alpha_hat_t.shape[1]//2 + 1)
-    fig,ax = plt.subplots(num_plots, 1, figsize=(10, 3*num_plots + 2), sharex=True)
+    fig,ax = plt.subplots(num_plots, 1, figsize=(8, 3*num_plots + 2), sharex=True)
     for i in range(alpha_hat_t.shape[1]):
         ind = 0
         if num_plots - 2*pem_sensors == 2:
@@ -1058,7 +1088,8 @@ def mles_vs_time(agg_dict, descrip=None, sensor='qpd', axis_ind=0, t_bin_width=N
             ax[i].set_ylabel(r'$\hat{\alpha} / 10^8$')
             handles, labels = ax[i].get_legend_handles_labels()
             order = list(range(1,len(ax[i].get_lines())))+[0]
-            ax[i].legend([handles[idx] for idx in order],[labels[idx] for idx in order],ncol=3,fontsize=10)
+            ax[i].legend([handles[idx] for idx in order],[labels[idx] for idx in order],ncol=3,\
+                         fontsize=10,handlelength=1.,columnspacing=1.)
         ax[i].grid(which='both')
         
     # plot the environmental data if requested
@@ -1071,7 +1102,7 @@ def mles_vs_time(agg_dict, descrip=None, sensor='qpd', axis_ind=0, t_bin_width=N
         for i in range(3):
             ax[-2].plot(pem_times_t, pem_data_t[0,i,:], marker='s', ms=5, \
                         color=colors(2*i), label=sensors[i]+' temp. -- {:.2f}'.format(pem_means[0,i,0]))
-            axis_2.plot(pem_times_t, pem_data_t[1,i,:], marker='d', ms=5, \
+            axis_2.plot(pem_times_t, pem_data_t[1,i,:], marker='D', ms=5, \
                         color=colors(2*i+1), label=sensors[i]+' rel. hum. -- {:.2f}'.format(pem_means[1,i,0]))
             ax[-1].plot(pem_times_t, pem_data_t[2,i,:], marker='o', ms=5, \
                         color=colors(2*i), label=sensors[i]+' press.. -- {:.2f}'.format(pem_means[2,i,0]))
@@ -1080,7 +1111,7 @@ def mles_vs_time(agg_dict, descrip=None, sensor='qpd', axis_ind=0, t_bin_width=N
         handles2, labels2 = axis_2.get_legend_handles_labels()
         handles = [item for pair in zip(handles1, handles2) for item in pair]
         labels = [item for pair in zip(labels1, labels2) for item in pair]
-        axis_2.legend(handles, labels, ncol=3)
+        axis_2.legend(handles, labels, ncol=3, handlelength=1., columnspacing=1.)
         axis_2.set_ylabel('Relative humidity [\%]')
         ax[-1].set_ylabel('Pressure [mbar]')
         ax[-1].legend(ncol=3)
