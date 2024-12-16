@@ -178,6 +178,25 @@ def gv_decimate(x, q, LPF, axis=-1):
     y = sig.sosfiltfilt(LPF, x)
     return y[tuple(sl)]
 
+def gv_to_float(x,e):
+    """Helper to handle the fixed to float conversion
+
+    x: array of int32
+        Fixed point number (signed) from NI hardware
+    e: int
+        Number of bits allotted to the decimal part.
+    """
+    c = np.abs(x)
+    sign = np.ones_like(x)
+    for aa in np.where(x<0):
+        # convert back from two's complement
+        c[aa] = x[aa] - 1
+        c[aa] = ~c[aa]
+        sign[aa] = -1
+    f = (1.0 * c) / (2 ** e)
+    f = f*sign
+    return f
+
 def get_environmental_data(agg_dict):
     """Get the environmental data from the PEM sensors for a given aggregate data dictionary.
 
