@@ -101,10 +101,9 @@ def polar_plots(agg_dict,descrip=None,indices=None,unwrap=False,axis_ind=0,harms
 
 
 def xy_on_qpd(qpd_diag_mat):
-    '''
-    Plot the x and y eigenmodes of the sphere overlaid on the QPD to see any
+    """Plots the x and y eigenmodes of the sphere overlaid on the QPD to see any
     misalignment and non-orthogonality.
-    '''
+    """
 
     # calculate QPD coords in bead eigenspace
     Q_trans_xy = np.matmul(qpd_diag_mat,np.array(((1,0,0,-1),(0,1,-1,0),(0,-1,1,0),(-1,0,0,1)))) #np.diag(np.ones(4)))
@@ -165,9 +164,8 @@ def xy_on_qpd(qpd_diag_mat):
 
 
 def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None,plot_null=False):
-    '''
-    Plot the cross-coupling before and after diagonalization.
-    '''
+    """Plots the cross-coupling before and after diagonalization.
+    """
     if plot_inds is None:
         plot_inds = shaking_inds(agg_dict)
 
@@ -241,15 +239,14 @@ def cross_coupling(agg_dict,qpd_diag_mat,p_x=None,p_y=None,plot_inds=None,plot_n
 
 def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000,agg_dict=None,\
                    resonance_drive_factors=[1.,1.,1.],diagonalize_qpd=False,plot_null=False):
-    '''
-    Plot the transfer functions and the fits for all axes.
+    """Plots the transfer functions and the fits for all axes.
 
     :path:                      path to the saved .h5 processed transfer function file
     :sensor:                    QPD or XYPD, depending on which should be plotted
     :phase:                     if True, plot the phases, otherwise plot the amplitudes
     :agg_dict:                  if provided, data from the agg_dict will be shown rather than the data in the TF file
     :resonance_drive_factors:   factor by which the driving force was scaled down near the resonance for [x,y,z]
-    '''
+    """
 
     if (diagonalize_qpd or plot_null) and agg_dict is None:
         print('Error: you must pass an agg_dict when using diagonalize_qpd or plot_null')
@@ -440,9 +437,8 @@ def wiener_filters(path, sensor='QPD', noise_only=False, phase=False):
 
 
 def visual_diag_mat(qpd_diag_mat,overlay=True):
-    '''
-    Visualize the effect of the QPD diagonalization matrix.
-    '''
+    """Visualize the effect of the QPD diagonalization matrix.
+    """
 
     # combine the two null channels into one
     diag_mat = np.copy(qpd_diag_mat)
@@ -514,9 +510,8 @@ def visual_diag_mat(qpd_diag_mat,overlay=True):
 
 def spectra(agg_dicts, descrips=None, plot_inds=None, harms=[], which='roi', \
             average=True, density=True, null=False, ylim=None):
-    '''
-    Plof of the QPD and XYPD spectra for a given dataset.
-    '''
+    """Plot of the QPD and XYPD spectra for a given dataset.
+    """
 
     if isinstance(agg_dicts, dict):
         agg_dicts = [agg_dicts]
@@ -644,9 +639,8 @@ def spectra(agg_dicts, descrips=None, plot_inds=None, harms=[], which='roi', \
 
 def env_noise(agg_dicts, descrips=None, plot_inds=None,
               which='roi', sensor='accel', ylim=None):
-    '''
-    Plof of the QPD and XYPD spectra for a given dataset.
-    '''
+    """Plot of the accelerometer or microphone spectra for a given dataset.
+    """
 
     if isinstance(agg_dicts, dict):
         agg_dicts = [agg_dicts]
@@ -717,9 +711,8 @@ def env_noise(agg_dicts, descrips=None, plot_inds=None,
 
 def spectrogram(agg_dict,descrip=None,sensor='qpd',which='roi',\
                 t_bin_width=None,vmin=None,vmax=None):
-    '''
-    Plot a spectrogram for the given dataset.
-    '''
+    """Plots a spectrogram for the given dataset and sensor.
+    """
     if descrip is None:
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
 
@@ -832,9 +825,8 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',which='roi',\
 
 def time_evolution(agg_dict,descrip=None,sensor='qpd',axis_ind=0,\
                    t_bin_width=None,ylim=None):
-    '''
-    Plot the time evolution of the measurement of a sensor along a given axis.
-    '''
+    """Plots the time evolution of the measurement of a sensor along a given axis.
+    """
     if descrip is None:
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
 
@@ -907,10 +899,9 @@ def time_evolution(agg_dict,descrip=None,sensor='qpd',axis_ind=0,\
 
 
 def position_drift(agg_dict, descrip=None, t_bin_width=None, pem_sensors=False):
-    '''
-    Plot the drift over time in the position of the bead and cantilever,
-    along with the laser and transmitted power.
-    '''
+    """Plots the drift over time in the position of the bead and cantilever,
+    along with the laser and transmitted power and optionally some environmental parameters.
+    """
     if descrip is None:
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
 
@@ -1012,9 +1003,8 @@ def position_drift(agg_dict, descrip=None, t_bin_width=None, pem_sensors=False):
 
 
 def mles_vs_time(agg_dict, descrip=None, sensor='qpd', axis_ind=0, t_bin_width=None, pem_sensors=False):
-    '''
-    Plot the MLE for alpha over time for a few harmonics.
-    '''
+    """Plots the MLE for alpha over time for a few harmonics.
+    """
 
     if descrip is None:
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
@@ -1132,9 +1122,8 @@ def mles_vs_time(agg_dict, descrip=None, sensor='qpd', axis_ind=0, t_bin_width=N
 
 def alpha_limit(agg_dict,descrip=None,sensor='qpd',title=None,lim_pos=None,lim_neg=None,\
                 lim_abs=None,lim_noise=None):
-    '''
-    Plot the alpha-lambda limit for a dataset.
-    '''
+    """Plots the alpha-lambda limit for a dataset.
+    """
 
     if descrip is None:
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
@@ -1193,9 +1182,8 @@ def alpha_limit(agg_dict,descrip=None,sensor='qpd',title=None,lim_pos=None,lim_n
 
 
 def limit_vs_integration(agg_dict,descrip=None,sensor='qpd'):
-    '''
-    Plot the evolution of the limit with increasing integration time.
-    '''
+    """Plots the evolution of the limit with increasing integration time.
+    """
 
     if descrip is None:
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
@@ -1274,10 +1262,9 @@ def limit_vs_integration(agg_dict,descrip=None,sensor='qpd'):
 
 def mle_fingerprint(agg_dict,mle_result,file_inds=None,lamb=1e-5,single_beta=False,num_gammas=1,\
                     delta_means=[0.1,0.1],axes=['x','y'],harms=[],channel='motion',log=True,errors=False):
-    '''
-    Plot the measured and fitted spectral fingerprints, showing the contribution of
+    """Plots the measured and fitted spectral fingerprints, showing the contribution of
     background and signal to the total measurement.
-    '''
+    """
 
     if file_inds is None:
         file_inds = shaking_inds(agg_dict)
@@ -1374,9 +1361,8 @@ def mle_fingerprint(agg_dict,mle_result,file_inds=None,lamb=1e-5,single_beta=Fal
 
 
 def q_alpha_fit(alphas,q_vals,alpha_hat,range=[-1,2],sigma_sys=None):
-    '''
-    Plot the fit to the test statistic vs alpha, from which the 95% CL limit is obtained.
-    '''
+    """Plots the fit to the test statistic vs alpha, from which the 95% CL limit is obtained.
+    """
 
     # alpha values for the fitted parabola plot
     alpha_vals = np.linspace(range[0]*alpha_hat,range[1]*alpha_hat,1000)
@@ -1417,9 +1403,8 @@ def q_alpha_fit(alphas,q_vals,alpha_hat,range=[-1,2],sigma_sys=None):
 def mles_vs_time_background(agg_dict,file_inds=None,lamb=1e-5,single_beta=False,num_gammas=1,\
                             delta_means=[0.1,0.1],phi_sigma=10.,axes=['x','y'],harms=[],spline=False,\
                             alpha_guess=1e9,descrip=None,t_bin_width=None):
-    '''
-    Plot the MLE parameters over time.
-    '''
+    """Plots the MLE parameters over time.
+    """
 
     if descrip is None:
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
@@ -1511,9 +1496,8 @@ def mles_vs_time_background(agg_dict,file_inds=None,lamb=1e-5,single_beta=False,
 
 
 def response_vs_time(agg_dict,file_inds=None,harms=[],descrip=None,t_bin_width=None,bands=False):
-    '''
-    Plot the response in the motion and null channels over time.
-    '''
+    """Plots the response in the motion and null channels over time.
+    """
 
     if descrip is None:
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
