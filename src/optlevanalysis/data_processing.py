@@ -69,6 +69,7 @@ class FileData:
         self.xypd_raw_data = np.array(((),(),()))
         self.qpd_dc_offsets = np.array(())
         self.xypd_dc_offsets = np.array(())
+        self.qpd_sum = np.array(())
         self.quad_amps = np.array(((),(),(),(),()))
         self.quad_phases = np.array(((),(),(),(),()))
         self.cant_pos_calibrated = np.array(((),(),()))
@@ -155,7 +156,7 @@ class FileData:
             self.diagonalize_qpd = True
         self.get_xyz_from_quad()
         self.xypd_raw_data = self.data_dict['xypd_data']
-        self.qpd_dc_offsets = np.mean(self.quad_raw_data, axis=-1)
+        self.qpd_dc_offsets = np.concatenate((np.mean(self.quad_raw_data, axis=-1), np.mean(self.quad_null, axis=-1)))
         self.xypd_dc_offsets = np.mean(self.xypd_raw_data, axis=-1)
         self.cant_raw_data = self.data_dict['cant_data']
         self.nsamp = len(self.times)
@@ -406,6 +407,7 @@ class FileData:
         # set object attribute with a numpy array of x,y,z
         self.quad_raw_data = np.array([x.astype(np.float64)/quad_sum,y.astype(np.float64)/quad_sum,phases[4]])
         self.quad_null = np.array([n1.astype(np.float64)/quad_sum, n2.astype(np.float64)/quad_sum])
+        self.qpd_sum = quad_sum
 
 
     def downsample_raw_data(self,wiener=[False,True,False,False,False],time_domain=False,window=None):
@@ -693,14 +695,14 @@ class FileData:
         # set calibrated time series and ffts as class attributes
         if sensor=='QPD':
             self.qpd_force_calibrated = bead_force_cal
-            calibrated_fft = np.append(calibrated_fft,np.repeat(force_cal_factors[0],1)*null_fft,axis=0)
+            calibrated_fft = np.append(calibrated_fft, np.repeat(force_cal_factors[0], 1)*null_fft, axis=0)
             self.qpd_ffts_full = calibrated_fft*norm_factor
-            self.qpd_dc_offsets *= self.force_cal_factors_qpd
+            self.qpd_dc_offsets *= np.concatenate((self.force_cal_factors_qpd, np.repeat(self.force_cal_factors_qpd[0], 2)))
         elif sensor=='XYPD':
             self.xypd_force_calibrated = bead_force_cal
             self.xypd_ffts_full = calibrated_fft*norm_factor
             self.xypd_dc_offsets *= self.force_cal_factors_xypd
-            self.xypd_dc_offsets[-1] = self.qpd_dc_offsets[-1]/self.force_cal_factors_qpd[-1]
+            self.xypd_dc_offsets[-1] = self.qpd_dc_offsets[2]/self.force_cal_factors_qpd[2]
 
 
     def filter_freq_domain(self, sensor_ffts, sensor='QPD', wiener=[False,True,False,False,False]):
@@ -734,13 +736,28 @@ class FileData:
                        '/wienerFilters.h5') as filter_file:
             for i, chan in enumerate(sensor_channels):
                 if skip[i]: continue
-                filters = [filter_file[which_filters][w + '_' + chan] for w in witness_channels]
+                filters = []
+                max_length = 0
+                for w in witness_channels:
+                    try:
+                        this_filter = filter_file[which_filters][w + '_' + chan]
+                        max_length = max(max_length, len(this_filter))
+                    except KeyError:
+                        continue
+                for w in witness_channels:
+                    try:
+                        filters.append(filter_file[which_filters][w + '_' + chan])
+                    except KeyError:
+                        filters.append(np.zeros(max_length))
                 filters = np.array(filters)
                 if filters.shape[-1] != witness_ffts.shape[-1]:
                     filters = np.pad(filters, ((0, 0), (0, witness_ffts.shape[-1] - filters.shape[-1])),\
                                      mode='constant', constant_values=0)
                 preds = witness_ffts * filters
                 preds = np.sum(preds, axis=0)
+                # scale z to physical units to match the scaling in the wiener filter files
+                if sensor_channels[i]=='zpd':
+                    preds /= (1.064*gv_to_float(np.array([1]),15)/2/np.pi)
                 sensor_ffts[i] -= preds
 
         return sensor_ffts
@@ -768,7 +785,7 @@ class FileData:
 
         # select the right calibration factor if diagonalizing the QPD
         suffix = ''
-        if diagonalize_qpd and sensor=='QPD':
+        if diagonalize_qpd and (sensor=='QPD') and (int(self.date) > 20230101):
             suffix = '_diag'
 
         with h5py.File(tf_path,'r') as tf_file:
@@ -1403,23 +1420,25 @@ class AggregateData:
         self.lightweight = lightweight
 
 
-    def load_yukawa_model(self,lambda_range=[1e-6,1e-4],num_lambdas=None,attractor='gold'):
+    def load_yukawa_model(self, lambda_range=[1e-6,1e-4], num_lambdas=None, attractor='gold', signal_path=None):
         """Loads functions used to make Yukawa-modified gravity templates
 
         :param lambda_range: Range of lambda values in meters, defaults to [1e-6,1e-4]
         :type lambda_range: list, optional
         :param num_lambdas: Number of lambda values to use, defaults to None
         :type num_lambdas: int, optional
+        :param attractor: Which attractor (gold or pt_black) to use
+        :type attractor: str, optional
         """
         self.__get_file_list()
         suffix = 'master' if attractor=='gold' else 'ptblack'
         signal_models = []
         for diam in self.diam_bead:
             if str(diam)[0]=='7':
-                signal_path = '/data/new_trap_processed/signal_templates/' + attractor + \
+                signal_path = '/data/new_trap_processed/signal_templates/yukawa_' + attractor + \
                               '_attractor/7_6um-gbead_1um-unit-cells_' + suffix + '/'
             elif str(diam)[0]=='1':
-                signal_path = '/data/new_trap_processed/signal_templates/' + attractor + \
+                signal_path = '/data/new_trap_processed/signal_templates/yukawa_' + attractor + \
                               '_attractor/10um-gbead_1um-unit-cells_' + suffix + '/'
             else:
                 print('Error: no signal model availabe for bead diameter {} um and {} attractor.'.format(diam, attractor))
@@ -1428,7 +1447,35 @@ class AggregateData:
             signal_models[-1].load_force_funcs(lambda_range=lambda_range,num_lambdas=num_lambdas)
             print('Yukawa-modified gravity signal model loaded for {} um bead and {} attractor.'.format(diam, attractor))
         self.signal_models = signal_models
-        
+
+
+    def load_powerlaw_model(self, N_val=2, r0_range=[1e-6,1e-4], num_r0s=None, attractor='gold'):
+        """Loads functions used to make power-law-modified gravity templates. Since this
+        parameterization is so similar to the Yukawa model, the same functions to build those
+        force templates are used for this model as well.
+
+        :param r0_range: Range of r0 values in meters, defaults to [1e-6,1e-4]
+        :type r0_range: list, optional
+        :param num_r0s: Number of r_0 values to use, defaults to None
+        :type num_r_0s: int, optional
+        """
+        self.__get_file_list()
+        signal_models = []
+        for diam in self.diam_bead:
+            if str(diam)[0]=='7':
+                signal_path = '/data/new_trap_processed/signal_templates/powerlaw_' + attractor + \
+                              '_attractor/7_6um-gbead/'
+            elif str(diam)[0]=='1':
+                signal_path = '/data/new_trap_processed/signal_templates/powerlaw_' + attractor + \
+                              '_attractor/10um-gbead/'
+            else:
+                print('Error: no signal model availabe for bead diameter {} um and {} attractor.'.format(diam, attractor))
+                break
+            signal_models.append(s.GravFuncs(signal_path))
+            signal_models[-1].load_force_funcs(lambda_range=r0_range, num_lambdas=num_r0s, N_val=N_val)
+            print('Power-law-modified gravity signal model loaded for {} um bead and {} attractor.'.format(diam, attractor))
+        self.signal_models = signal_models
+
 
     def process_file(self,file_path,qpd_diag_mat=None,signal_model=None,ml_model=None,p0_bead=None,\
                      mass_bead=0,harms=[],max_freq=2500.,downsample=True,wiener=[False,True,False,False,False],\
@@ -1513,6 +1560,7 @@ class AggregateData:
         qpd_ffts_full = []
         qpd_sb_ffts = []
         qpd_dc_offsets = []
+        qpd_sums = []
         xypd_ffts = []
         xypd_ffts_full = []
         xypd_dc_offsets = []
@@ -1549,6 +1597,7 @@ class AggregateData:
             xypd_ffts_full.append(f.xypd_ffts_full)
             xypd_sb_ffts.append(f.xypd_sb_ffts)
             xypd_dc_offsets.append(f.xypd_dc_offsets)
+            qpd_sums.append(f.qpd_sum)
             template_ffts.append(f.template_ffts)
             template_params.append(f.template_params)
             cant_fft.append(f.cant_fft)
@@ -1591,6 +1640,7 @@ class AggregateData:
         xypd_ffts_full = np.array(xypd_ffts_full)
         xypd_sb_ffts = np.array(xypd_sb_ffts)
         xypd_dc_offsets = np.array(xypd_dc_offsets)
+        qpd_sums = np.array(qpd_sums)
         template_ffts = np.array(template_ffts)
         template_params = np.array(template_params)
         cant_fft = np.array(cant_fft)
@@ -1623,6 +1673,7 @@ class AggregateData:
         agg_dict['xypd_ffts_full'] = xypd_ffts_full
         agg_dict['xypd_sb_ffts'] = xypd_sb_ffts
         agg_dict['xypd_dc_offsets'] = xypd_dc_offsets
+        agg_dict['qpd_sums'] = qpd_sums
         agg_dict['template_ffts'] = template_ffts
         agg_dict['template_params'] = template_params
         agg_dict['cant_fft'] = cant_fft
