@@ -13,13 +13,12 @@ from optlevanalysis.stats import *
 np.seterr(all='ignore')
 
 
-def polar_plots(agg_dict,descrip=None,indices=None,unwrap=False,axis_ind=0,sensor='qpd',\
+def polar_plots(agg_dict,descrip=None,indices=None,unwrap=False,axis_ind=0,harms=None,sensor='qpd',\
                 amp_bins=np.logspace(-17,-15, 30),phase_bins=np.linspace(-np.pi,np.pi,60),\
                 vmax=None,plot_templates=True,alphas=np.array((1e8,1e9,1e10))):
-    '''
-    Plot 2d polar histograms binning the datasets by the amplitude and phase at a particular
+    """Plots 2d polar histograms binning the datasets by the amplitude and phase at a particular
     harmonic along a given axes.
-    '''
+    """
     if descrip is None:
         descrip = datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d')
     if indices is None:
@@ -27,7 +26,9 @@ def polar_plots(agg_dict,descrip=None,indices=None,unwrap=False,axis_ind=0,senso
     if vmax is None:
         vmax = int(len(agg_dict['timestamp'])/100)
     freqs = agg_dict['freqs']
-    harms = freqs[agg_dict['good_inds']]
+    if harms is None:
+        harms = np.arange(len(agg_dict['good_inds']))
+    good_inds = agg_dict['good_inds']
     cmap_polar = plt.get_cmap('inferno') 
     cmap_polar.set_under(color='white',alpha=0)
     axes = ['$x$','$y$','$z$','null']
@@ -37,7 +38,7 @@ def polar_plots(agg_dict,descrip=None,indices=None,unwrap=False,axis_ind=0,senso
 
     fig,axs = plt.subplots(2, 4, figsize=(16,9), sharex=True, sharey=True, subplot_kw=subplot_kw)
     # loop through harmonics
-    for h,ax in zip(range(len(harms)), axs.flatten()[:-1]):
+    for h,ax in zip(harms, axs.flatten()[:-1]):
         ffts = agg_dict[sensor+'_ffts'][indices][:,axis_ind,h]
         sens_title = sensor.upper()
         # reference phase, will be set to alpha>0 if templates are to be plotted
@@ -73,7 +74,7 @@ def polar_plots(agg_dict,descrip=None,indices=None,unwrap=False,axis_ind=0,senso
             ax.set_rlim([min(amp_bins),max(amp_bins)])
             ax.set_yticks([])
             ax.set_yticklabels([])
-        ax.set_title('{:.0f} Hz'.format(harms[h]),fontsize=20)
+        ax.set_title('{:.0f} Hz'.format(agg_dict['freqs'][good_inds[h]]),fontsize=20)
     axs.flatten()[-1].axis('off')
 
     y_range_str = '({:.0e},{:.0e})'.format(axs.flatten()[0].get_ylim()[0],axs.flatten()[0].get_ylim()[1])
@@ -363,6 +364,81 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000,agg_dict
     return fig,ax
 
 
+def wiener_filters(path, sensor='QPD', noise_only=False, phase=False):
+    """Plots the Wiener filter transfer functions.
+
+    :param path: Path to the HDF5 file containing the filters
+    :type path: str
+    :param sensor: which sensors to use, QPD or XYPD
+    :type sensor: str
+    :param noise_only: whether to plot the filters for the noise-only data
+    :type noise_only: bool
+    :param phase: whether to plot the phase rather than magnitude of the transfer functions
+    :type phase: bool
+    :return: The figure and axis objects
+    :rtype: tuple
+    """
+
+    witness_channels = ['accel_x', 'accel_y', 'accel_z', 'mic_1']
+    wiener = [True]*5
+
+    sensor = 'QPD'
+
+    if sensor == 'QPD':
+        sensor_channels = ['qpd_x', 'qpd_y', 'zpd']
+        skip = ~np.array(wiener[0:3])
+    elif sensor == 'XYPD':
+        sensor_channels = ['xypd_x', 'xypd_y']
+        skip = ~np.array(wiener[3:])
+    which_filters = ['filters_shaking', 'filters_noise'][noise_only]
+
+    fig, ax = plt.subplots(len(sensor_channels), 4, figsize=(14, 10 + 4*int(len(sensor_channels)>2)), \
+                           sharex=True, sharey='row')
+
+    with h5py.File(path, 'r') as filter_file:
+        freqs = np.array(filter_file['ff_LPF'])
+        for i, chan in enumerate(sensor_channels):
+            if skip[i]: continue
+            filters = []
+            max_length = 0
+            for w in witness_channels:
+                try:
+                    this_filter = filter_file[which_filters][w + '_' + chan]
+                    max_length = max(max_length, len(this_filter))
+                except KeyError:
+                    continue
+            for w in witness_channels:
+                try:
+                    filters.append(filter_file[which_filters][w + '_' + chan])
+                except KeyError:
+                    filters.append(np.zeros(max_length))
+            filters = np.array(filters)
+            for j in range(len(witness_channels)):
+                if phase:
+                    ax[i,j].plot(freqs, np.angle(filters[j])*180./np.pi, marker='.', ls='none')
+                    ax[i,j].set_ylim([-200, 200])
+                    ax[i,j].set_yticks([-180, -90, 0, 90, 180])
+                else:
+                    ax[i,j].semilogy(freqs, np.abs(filters[j]))
+                ax[i,j].grid(which='both')
+                if i==0:
+                    title = witness_channels[j].replace('_', ' ')
+                    ax[0,j].set_title(title[0].upper() + title[1:])
+                    ax[-1,j].set_xlabel('Frequency [Hz]')
+                if j==0:
+                    titles = sensor_channels[i].split('_')
+                    title_start = titles[0].upper()
+                    title_end = ''
+                    if len(titles)>1:
+                        title_end = ' ' + titles[1]         
+                    ax[i,0].set_ylabel(title_start + title_end + [' TF magnitude', ' TF phase [$^\circ$]'][int(phase)])
+
+    fig.subplots_adjust(wspace=0.05, hspace=0.05)
+    fig.suptitle('Wiener filter transfer functions ' + ['magnitudes', 'phases'][int(phase)], y=0.94)
+
+    return fig, ax
+
+
 def visual_diag_mat(qpd_diag_mat,overlay=True):
     '''
     Visualize the effect of the QPD diagonalization matrix.
@@ -437,7 +513,7 @@ def visual_diag_mat(qpd_diag_mat,overlay=True):
 
 
 def spectra(agg_dicts, descrips=None, plot_inds=None, harms=[], which='roi', \
-            average=True, density=True, null=True, accel=False, ylim=None):
+            average=True, density=True, null=False, ylim=None):
     '''
     Plof of the QPD and XYPD spectra for a given dataset.
     '''
@@ -450,6 +526,7 @@ def spectra(agg_dicts, descrips=None, plot_inds=None, harms=[], which='roi', \
 
     if plot_inds is None:
         plot_inds = [shaking_inds(agg_dict) for agg_dict in agg_dicts]
+        # plot_inds = [agg_dict['is_noise'] for agg_dict in agg_dicts]
 
     if which=='rayleigh' and ((not density) or (not average)):
         print('Ignoring density and average arguments for Rayleigh statistic plot...')
@@ -565,7 +642,80 @@ def spectra(agg_dicts, descrips=None, plot_inds=None, harms=[], which='roi', \
     return fig,ax
 
 
-def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
+def env_noise(agg_dicts, descrips=None, plot_inds=None,
+              which='roi', sensor='accel', ylim=None):
+    '''
+    Plof of the QPD and XYPD spectra for a given dataset.
+    '''
+
+    if isinstance(agg_dicts, dict):
+        agg_dicts = [agg_dicts]
+
+    if descrips is None:
+        descrips = [datetime.fromtimestamp(agg_dict['timestamp'][0]).strftime('%Y%m%d') for agg_dict in agg_dicts]
+
+    if plot_inds is None:
+        plot_inds = [shaking_inds(agg_dict) for agg_dict in agg_dicts]
+
+    # figure setup
+    plt.rcParams.update({'figure.autolayout': False})
+    colors = style.library['fivethirtyeight']['axes.prop_cycle'].by_key()['color']
+    axes = ['x', 'y', 'z']
+    num_subplots = 3
+    if sensor=='mic':
+        num_subplots = np.amax([np.shape(agg_dict['microphones'])[1] for agg_dict in agg_dicts])
+        axes = [str(i+1) for i in range(num_subplots)]
+    sensor_title = 'Mic.' if sensor=='mic' else 'Accel.'
+    fig,axs = plt.subplots(num_subplots, 1, figsize=(5, 1 + 3*num_subplots), sharex=True, squeeze=False)
+    ax = axs[:,0]
+
+    for a, agg_dict in enumerate(agg_dicts):
+
+        # get data to be plotted
+        freqs = agg_dict['freqs']
+        fsamp = agg_dict['fsamp']
+        window_s1 = agg_dict['window_s1']
+        window_s2 = agg_dict['window_s2']
+        fft_to_asd = window_s1/np.sqrt(2.*fsamp*window_s2)
+
+        if sensor=='accel':
+            ffts = np.fft.rfft(agg_dict['accelerometer']*9.8/1000.,axis=-1)[:,:len(freqs)]*2./window_s1
+            [ax[i].set_ylabel('$a_{' + axes[i] + '}$ [$\mathrm{m/s^2}/\sqrt{\mathrm{Hz}}$]') for i in range(num_subplots)]
+        elif sensor=='mic':
+            ffts = np.fft.rfft(agg_dict['microphones']*9.8/1000.,axis=-1)[:,:len(freqs)]*2./window_s1
+            [ax[i].set_ylabel('Mic. ' + str(i+1) + ' [au$/\sqrt{\mathrm{Hz}}$]') for i in range(num_subplots)]
+        accel_spec = np.mean(np.abs(ffts), axis=0)*fft_to_asd
+        ax[-1].set_xlabel('Frequency [Hz]')
+        
+        for j in range(accel_spec.shape[0]):
+            if which=='roi':
+                ax[j].semilogy(freqs,accel_spec[j],lw=1,color=colors[a],label='${}$, '.format(axes[j]) + descrips[a])
+                ax[-1].set_xlim([0,50])
+            elif which=='full':
+                ax[j].loglog(freqs,accel_spec[j],lw=1,color=colors[a],label='${}$, '.format(axes[j]) + descrips[a])
+                ax[-1].set_xlim([1,max(freqs)])
+            elif which=='rayleigh':
+                ax[j].semilogy(freqs,rayleigh(np.abs(ffts[:,j,:]*fft_to_asd)**2),lw=1,color=colors[a],label='${}$, '.format(axes[j]) + descrips[a])
+                [ax[i].set_ylabel('$' + axes[i] + '$ Rayleigh statistic [1/Hz]') for i in range(num_subplots)]
+                ax[-1].set_xlim([0,50])
+
+    # legend, grids, layout
+    if ylim is not None:
+        [ax[i,0].set_ylim(ylim) for i in range(num_subplots)]
+    [ax[i].legend() for i in range(num_subplots)]
+    [ax[i].grid(which='both') for i in range(num_subplots)]
+    fig.subplots_adjust(hspace=0.1, wspace=0.07)
+    titles = np.array(['ROI', 'full', 'Rayleigh'])
+    title = titles[np.array([t.lower()==which for t in titles])][0]
+    fig.suptitle(sensor_title + ' ' + title + ' spectral densities', y=0.92 + 0.04*float(sensor=='mic'), fontsize=20)
+
+    # for some reason memory is not released and in subsequent function calls this can cause errors
+    del ffts,accel_spec,freqs
+
+    return fig,ax
+
+
+def spectrogram(agg_dict,descrip=None,sensor='qpd',which='roi',\
                 t_bin_width=None,vmin=None,vmax=None):
     '''
     Plot a spectrogram for the given dataset.
@@ -576,7 +726,6 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
     if t_bin_width is None:
         t_bin_width = max(60,int((agg_dict['timestamp'][-1]-agg_dict['timestamp'][0])/100))
 
-    axes = ['x','y','z']
     freqs = agg_dict['freqs']
     fsamp = agg_dict['fsamp']
     window_s1 = agg_dict['window_s1']
@@ -584,85 +733,97 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',axis_ind=0,which='roi',\
     fft_to_asd = window_s1/np.sqrt(2.*fsamp*window_s2)
     sensor_title = sensor.upper()
     units = '\mathrm{N}'
-    if sensor=='accel':
-        # convert accelerometer data to m/s^2 using 1000 V/g calibration factor
-        ffts = np.fft.rfft(np.sqrt(np.sum(agg_dict['accelerometer']**2,axis=1))\
-                           *9.8/1000.,axis=-1)[:,:len(freqs)]*2./window_s1
-        asds = np.abs(ffts*fft_to_asd)
-        axis_ind = 2
-        sensor_title = 'Accel.'
-        units = '\mathrm{m/s^2}'
-        if ((vmin is None) or (vmax is None)) and which!='rayleigh':
-            vmin = 1e-6
-            vmax = 1e-2
-    else:
-        asds = np.abs(agg_dict[sensor+'_ffts_full'][:,axis_ind,:])*fft_to_asd
+    num_subplots = 3
+    if sensor=='mic':
+        num_subplots = np.shape(agg_dict['microphones'])[1]
 
-    # if the calibration has not been applied, scale the limits so the data will still appear
-    ylim_scale = 1
-    if np.all(asds > 1e-14) and sensor!='accel':
-        ylim_scale = 1e11
-        units = '\mathrm{au}'
-        if axis_ind==2:
-            asds *= 1e-7
+    fig,axs = plt.subplots(num_subplots, 1, figsize=(5, 1 + 3*num_subplots), sharex=True, squeeze=False)
+    ax = axs[:,0]
+    for axis_ind in range(num_subplots):
+        if sensor=='accel':
+            # convert accelerometer data to m/s^2 using 1000 V/g calibration factor
+            ffts = np.fft.rfft(agg_dict['accelerometer'][:,axis_ind,:]*9.8/1000.,axis=-1)[:,:len(freqs)]*2./window_s1
+            asds = np.abs(ffts*fft_to_asd)
+            sensor_title = 'Accel.'
+            units = '\mathrm{m/s^2}'
+            if ((vmin is None) or (vmax is None)) and which!='rayleigh':
+                vmin = 1e-6
+                vmax = 1e-2
+        elif sensor=='mic':
+            ffts = np.fft.rfft(agg_dict['microphones'])[:,axis_ind,:][:,:len(freqs)]
+            asds = np.abs(ffts*fft_to_asd)
+            sensor_title = 'Mic.'
+            units = '\mathrm{au}'
+            if ((vmin is None) or (vmax is None)) and which!='rayleigh':
+                vmin = 1e-1
+                vmax = 1e3
+        else:
+            asds = np.abs(agg_dict[sensor+'_ffts_full'][:,axis_ind,:])*fft_to_asd
 
-    times = agg_dict['times']
-    av_times = np.mean(times,axis=1)
-    start_date = datetime.fromtimestamp(av_times[0]*1e-9).strftime('%b %d, %H:%M:%S')
-    hours = (av_times-av_times[0])*1e-9/3600.
+        # if the calibration has not been applied, scale the limits so the data will still appear
+        ylim_scale = 1
+        if np.all(asds > 1e-14) and (sensor!='accel' and sensor!='mic'):
+            ylim_scale = 1e11
+            units = '\mathrm{au}'
+            if axis_ind==2:
+                asds *= 1e-7
 
-    delta_t = (av_times[1]-av_times[0])*1e-9
-    t_bins = int(round(t_bin_width/delta_t))
-    num_t_bins = int(len(av_times)/t_bins)
-    spec_ray = np.zeros((num_t_bins,len(freqs)))
-    spec_asd = np.zeros((num_t_bins,len(freqs)))
-    plot_times = np.zeros(num_t_bins)
+        times = agg_dict['times']
+        av_times = np.mean(times,axis=1)
+        start_date = datetime.fromtimestamp(av_times[0]*1e-9).strftime('%b %d, %H:%M:%S')
+        hours = (av_times-av_times[0])*1e-9/3600.
 
-    fig,ax = plt.subplots()
-    if which=='roi':
-        if (vmin is None) or (vmax is None):
-            vmin = 2e-18*ylim_scale
-            vmax = 2e-14*ylim_scale
-        for i in range(spec_ray.shape[0]):
-            spec_asd[i,:] = np.sqrt(np.mean(asds[i*t_bins:(i+1)*t_bins,:]**2,axis=0))
-            plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
-        pcm = ax.pcolormesh(plot_times,freqs,spec_asd.T,norm=LogNorm(vmin=vmin,vmax=vmax),cmap='magma')
-        ax.set_ylabel('Frequency [Hz]')
-        ax.set_ylim([0.1,50])
-        ax.set_xlabel('Time since '+start_date+' [hours]')
-        ax.set_title(sensor_title+' $'+axes[axis_ind]+'$ ROI spectrogram for '+descrip)
-        cbar = fig.colorbar(pcm)
-        cbar.set_label('ASD [$'+units+'/\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
-    elif which=='full':
-        if (vmin is None) or (vmax is None):
-            vmin = 2e-19*ylim_scale
-            vmax = 2e-14*ylim_scale
-        for i in range(spec_ray.shape[0]):
-            spec_asd[i,:] = np.sqrt(np.mean(asds[i*t_bins:(i+1)*t_bins,:]**2,axis=0))
-            plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
-        pcm = ax.pcolormesh(plot_times,freqs,spec_asd.T,norm=LogNorm(vmin=vmin,vmax=vmax),cmap='magma')
-        ax.set_ylabel('Frequency [Hz]')
-        ax.set_ylim([0.1,max(freqs)])
-        ax.set_xlabel('Time since '+start_date+' [hours]')
-        ax.set_yscale('log')
-        ax.set_title(sensor_title+' $'+axes[axis_ind]+'$ full spectrogram for '+descrip)
-        cbar = fig.colorbar(pcm)
-        cbar.set_label('ASD [$'+units+'/\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
-    elif which=='rayleigh':
-        if (vmin is None) or (vmax is None):
-            vmin = 1e-1
-            vmax = 1e1
-        for i in range(spec_ray.shape[0]):
-            spec_ray[i,:] = rayleigh(asds[i*t_bins:(i+1)*t_bins,:]**2)
-            plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
-        pcm = ax.pcolormesh(plot_times,freqs,spec_ray.T,norm=LogNorm(vmin=vmin,vmax=vmax),cmap='coolwarm')
-        ax.set_ylabel('Frequency [Hz]')
-        ax.set_ylim([0.1,50])
-        ax.set_xlabel('Time since '+start_date+' [hours]')
-        ax.set_title(sensor_title+' $'+axes[axis_ind]+'$ Rayleigh spectrogram for '+descrip)
-        cbar = fig.colorbar(pcm)
-        cbar.set_label('Rayleigh statistic [1/$\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
+        delta_t = (av_times[1]-av_times[0])*1e-9
+        t_bins = int(round(t_bin_width/delta_t))
+        num_t_bins = int(len(av_times)/t_bins)
+        spec_ray = np.zeros((num_t_bins,len(freqs)))
+        spec_asd = np.zeros((num_t_bins,len(freqs)))
+        plot_times = np.zeros(num_t_bins)
 
+        if which=='roi':
+            if (vmin is None) or (vmax is None):
+                vmin = 2e-18*ylim_scale
+                vmax = 2e-14*ylim_scale
+            for i in range(spec_ray.shape[0]):
+                spec_asd[i,:] = np.sqrt(np.mean(asds[i*t_bins:(i+1)*t_bins,:]**2,axis=0))
+                plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
+            pcm = ax[axis_ind].pcolormesh(plot_times,freqs,spec_asd.T,norm=LogNorm(vmin=vmin,vmax=vmax),cmap='magma')
+            ax[axis_ind].set_ylabel('Frequency [Hz]')
+            ax[axis_ind].set_ylim([0.1,50])
+            cbar = fig.colorbar(pcm)
+            cbar.set_label('ASD [$'+units+'/\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
+        elif which=='full':
+            if (vmin is None) or (vmax is None):
+                vmin = 2e-19*ylim_scale
+                vmax = 2e-14*ylim_scale
+            for i in range(spec_ray.shape[0]):
+                spec_asd[i,:] = np.sqrt(np.mean(asds[i*t_bins:(i+1)*t_bins,:]**2,axis=0))
+                plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
+            pcm = ax[axis_ind].pcolormesh(plot_times,freqs,spec_asd.T,norm=LogNorm(vmin=vmin,vmax=vmax),cmap='magma')
+            ax[axis_ind].set_ylabel('Frequency [Hz]')
+            ax[axis_ind].set_ylim([0.1,max(freqs)])
+            ax[axis_ind].set_yscale('log')
+            cbar = fig.colorbar(pcm)
+            cbar.set_label('ASD [$'+units+'/\sqrt{\mathrm{Hz}}$]',rotation=270,labelpad=16)
+        elif which=='rayleigh':
+            if (vmin is None) or (vmax is None):
+                vmin = 1e-1
+                vmax = 1e1
+            for i in range(spec_ray.shape[0]):
+                spec_ray[i,:] = rayleigh(asds[i*t_bins:(i+1)*t_bins,:]**2)
+                plot_times[i] = np.mean(hours[i*t_bins:(i+1)*t_bins])
+            pcm = ax[axis_ind].pcolormesh(plot_times,freqs,spec_ray.T,norm=LogNorm(vmin=vmin,vmax=vmax),cmap='coolwarm')
+            ax[axis_ind].set_ylabel('Frequency [Hz]')
+            ax[axis_ind].set_ylim([0.1,50])
+            cbar = fig.colorbar(pcm)
+            cbar.set_label('Rayleigh statistic [1/Hz]',rotation=270,labelpad=16)
+
+    ax[-1].set_xlabel('Time since '+start_date+' [hours]')
+    titles = np.array(['ROI', 'full', 'Rayleigh'])
+    title = titles[np.array([t.lower()==which for t in titles])][0]
+    fig.suptitle(sensor_title + ' ' + title + ' spectrogram for ' + descrip, y=0.92 + 0.04*float(sensor=='mic'))
+    fig.subplots_adjust(hspace=0.08)
+    
     # for some reason memory is not released and in subsequent function calls this can cause errors
     del freqs,asds,times,av_times,start_date,hours
 
@@ -793,26 +954,26 @@ def position_drift(agg_dict,descrip=None,t_bin_width=None):
 
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
-    fig,ax = plt.subplots(2,1,figsize=(8,8),sharex=True)
-    l1 = ax[0].plot(plot_times,lp_t*1e3,color=colors[0],alpha=0.65,label='Laser power')
-    l2 = ax[0].plot(plot_times,pt_t*40e3,color=colors[1],alpha=0.65,label='Trans. power ($\\times 40$)')
-    ax[0].set_title('Time evolution of parameters for '+descrip)
-    ax[0].set_ylabel('Power [$\mu$W]')
-    ax2 = ax[0].twinx()
+    fig,ax = plt.subplots(2,2,figsize=(10,8),sharex=True,sharey='row')
+    l1 = ax[0,0].plot(plot_times,lp_t*1e3,color=colors[0],alpha=0.65,label='Laser power')
+    l2 = ax[0,0].plot(plot_times,pt_t*40e3,color=colors[1],alpha=0.65,label='Trans. power ($\\times 40$)')
+    ax[0,0].set_title('Time evolution of parameters for '+descrip)
+    ax[0,0].set_ylabel('Power [$\mu$W]')
+    ax2 = ax[0,0].twinx()
     l3 = ax2.plot(plot_times,bh_t*1e3,color=colors[2],ls='-.',label='Bead height')
     ls = l1+l2+l3
     labs = [l.get_label() for l in ls]
     ax2.set_ylabel('Bead height [nm]',rotation=270,labelpad=16)
-    ax[0].grid(which='both')
+    ax[0,0].grid(which='both')
     ax2.legend(ls,labs)
 
-    ax[1].plot(plot_times,cx_t,label='Cant. $x~-$ {:.1f} $\mu$m'.format(x0))
-    ax[1].plot(plot_times,cz_t,label='Cant. $z~-$ {:.1f} $\mu$m'.format(z0))
-    ax[1].set_ylabel('Cantilever position drift [$\mu$m]')
-    ax[1].set_xlabel('Time since '+start_date+' [hours]')
-    ax[1].set_xlim([min(plot_times),max(plot_times)])
-    ax[1].grid(which='both')
-    ax[1].legend()
+    ax[1,0].plot(plot_times,cx_t,label='Cant. $x~-$ {:.1f} $\mu$m'.format(x0))
+    ax[1,0].plot(plot_times,cz_t,label='Cant. $z~-$ {:.1f} $\mu$m'.format(z0))
+    ax[1,0].set_ylabel('Cantilever position drift [$\mu$m]')
+    ax[1,0].set_xlabel('Time since '+start_date+' [hours]')
+    ax[1,0].set_xlim([min(plot_times),max(plot_times)])
+    ax[1,0].grid(which='both')
+    ax[1,0].legend()
 
     del lp,pt,bh,cx,cz,lp_t,pt_t,bh_t,cx_t,cz_t,times,plot_times,av_times,\
         start_date,hours,delta_t,num_t_bins,colors
@@ -875,7 +1036,7 @@ def mles_vs_time(agg_dict, descrip=None, sensor='qpd', axis_ind=0, t_bin_width=N
         # downsample the environmental data if requested
         if pem_sensors:
             start_pem_ind = np.argmin(np.abs(start_dt + timedelta(hours=hours[i*t_bins]) - pem_times))
-            end_pem_ind = np.argmin(np.abs(start_dt + timedelta(hours=hours[(i+1)*t_bins]) - pem_times))
+            end_pem_ind = np.argmin(np.abs(start_dt + timedelta(hours=hours[min((i+1)*t_bins,len(hours)-1)]) - pem_times))
             pem_data_t[:,:,i] = np.mean(pem_data[1:,:,start_pem_ind:end_pem_ind],axis=2)
             pem_times_t[i] = (pem_times[(start_pem_ind + end_pem_ind)//2] - start_dt).total_seconds()/3600.
 
