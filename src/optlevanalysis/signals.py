@@ -4,9 +4,8 @@ from scipy import interpolate
 class SignalModel:
 
     def __init__(self,theory_data_dir):
-        '''
-        Initialize signal model object.
-        '''
+        """Initializes signal model object.
+        """
         self.loaded = False
         self.theory_data_dir = theory_data_dir
 
@@ -21,20 +20,25 @@ class SignalModel:
 
 
 class GravFuncs(SignalModel):
-    '''
-    Child class of SignalModel for the Yukawa-modified gravity model.
-    '''
+    """Child class of SignalModel for the Yukawa-modified gravity model or the
+    power-law-modified gravity model.
+    """
 
-    def load_force_funcs(self,lambda_range=[1e-6,1e-4],num_lambdas=None):
-        '''
-        Loads data from the output of /data/grav_sim_data/process_data.py
-        which processes the raw simulation output from the farmshare code.
-        '''
+    def load_force_funcs(self, lambda_range=[1e-6,1e-4], num_lambdas=None, N_val=None):
+        """Loads data from the output of /data/grav_sim_data/process_data.py
+        which processes the raw simulation output from the farmshare code. Uses the Yukawa
+        parameterization unless N_val is provided, in which case the power law modification
+        for N=N_val is used.
+        """
 
         # load modified gravity curves from simulation output
         Gdata = np.load(self.theory_data_dir + 'Gravdata.npy')
-        yukdata = np.load(self.theory_data_dir + 'yukdata.npy')
-        lambdas = np.load(self.theory_data_dir + 'lambdas.npy')
+        if N_val is None:
+            yukdata = np.load(self.theory_data_dir + 'yukdata.npy')
+            lambdas = np.load(self.theory_data_dir + 'lambdas.npy')
+        else:
+            yukdata = np.load(self.theory_data_dir + 'Nequals{}data.npy'.format(N_val))
+            lambdas = np.load(self.theory_data_dir + 'r0s.npy')
         xpos = np.load(self.theory_data_dir + 'xpos.npy')
         ypos = np.load(self.theory_data_dir + 'ypos.npy')
         zpos = np.load(self.theory_data_dir + 'zpos.npy')
@@ -42,8 +46,8 @@ class GravFuncs(SignalModel):
 
         # get only the subset of lambda values requested
         lambda_inds = np.arange(0,len(lambdas))
-        lambda_inds = lambda_inds[(lambdas>lambda_range[0]) & (lambdas<lambda_range[1])]
-        lambda_sub = lambdas[(lambdas>lambda_range[0]) & (lambdas<lambda_range[1])]
+        lambda_inds = lambda_inds[(lambdas>=lambda_range[0]) & (lambdas<=lambda_range[1])]
+        lambda_sub = lambdas[(lambdas>=lambda_range[0]) & (lambdas<=lambda_range[1])]
         if num_lambdas:
             if num_lambdas<len(lambda_sub):
                 lambda_mask = np.round(np.linspace(0,len(lambda_sub)-1,num_lambdas)).astype(int)
@@ -80,21 +84,19 @@ class GravFuncs(SignalModel):
 
 
     def get_params_and_inds(self):
-        '''
-        Returns a tuple of arrays of the parameters and their corresponding indices,
+        """Returns a tuple of arrays of the parameters and their corresponding indices,
         to be used for passing to get_force_at_pos
-        '''
-        return self.lambdas,np.array(range(len(self.lambdas)))
+        """
+        return self.lambdas, np.array(range(len(self.lambdas)))
     
 
     def get_force_at_pos(self, positions, param_inds):
-        '''
-        Return the force at a given position. Argument 'positions' is an array of dimensions
+        """Return the force at a given position. Argument 'positions' is an array of dimensions
         Nx3 where N is the number of positions where the force should be calculated. Argument
         'param_inds' is a list of length M where M is the number of free parameters in the
         model. For the Yukawa-modified gravity model, there is only one additional parameter,
         lambda.
-        '''
+        """
 
         # index of the parameter to choose the correct interpolating function
         lamb_ind = param_inds[0]
@@ -110,12 +112,11 @@ class GravFuncs(SignalModel):
     
 
     def get_grav_at_pos(self, positions):
-        '''
-        Return the force at a given position. Argument 'positions' is an array of dimensions
+        """Return the force at a given position. Argument 'positions' is an array of dimensions
         Nx3 where N is the number of positions where the force should be calculated. Argument
         'param_inds' is a list of length M where M is the number of free parameters in the
         model. 
-        '''
+        """
 
         # get the x,y, and z components of the force and return them
         x_force = self.grav_funcs[0](positions)
@@ -128,15 +129,13 @@ class GravFuncs(SignalModel):
     
 
 class EDMFuncs(SignalModel):
-    '''
-    Child class of SignalModel for the electric dipole moment background model.
-    '''
+    """Child class of SignalModel for the electric dipole moment background model.
+    """
 
     def load_force_funcs(self,dipole_vec=[100,0,0]):
-        '''
-        Load the electric dipole moment background model, which has been parsed from
+        """Loads the electric dipole moment background model, which has been parsed from
         the COMSOL simulation output and saved as numpy arrays.
-        '''
+        """
 
         # load electric dipole moment background data from simulation output
         grad_e = np.load(self.theory_data_dir + 'grad_efield.npy')
@@ -163,10 +162,9 @@ class EDMFuncs(SignalModel):
 
 
     def get_force_at_pos(self, positions):
-        '''
-        Return the force at a given position. Argument 'positions' is an array of dimensions
+        """Returns the force at a given position. Argument 'positions' is an array of dimensions
         Nx3 where N is the number of positions where the force should be calculated.
-        '''
+        """
 
         # get the x,y, and z components of the force and return them
         x_force = self.edm_funcs[0](positions)
