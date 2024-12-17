@@ -97,7 +97,7 @@ def fit_alpha_for_file(agg_dict,file_index,use_sidebands=False,noise_index=None,
                 sb_fft_array = bead_sb_ffts[axis,harm*num_sb:(harm+1)*num_sb]
                 var = (1./(2.*num_sb))*np.sum(np.real(sb_fft_array)**2+np.imag(sb_fft_array)**2)
             else:
-                var = np.abs(noise_ffts[axis,harm])**2
+                var = np.abs(noise_ffts[axis,harm])**2/2.
             data_real = np.real(data)
             data_imag = np.imag(data)
 
