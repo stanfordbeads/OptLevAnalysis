@@ -6,7 +6,7 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 from datetime import datetime, timedelta
 from scipy import signal
-import scipy.stats as st
+import scipy.stats as stats
 import h5py
 from optlevanalysis.funcs import *
 from optlevanalysis.stats import *
@@ -91,6 +91,7 @@ def polar_plots(agg_dict,descrip=None,indices=None,unwrap=False,axis_ind=0,harms
     cbar = fig.colorbar(im, ax=axs.flatten()[-1], orientation='horizontal', fraction=0.1)
     cbar.ax.set_xlabel('Number of 10s datasets',fontsize=18)
     fig.suptitle(sens_title+' measurements for the '+axes[axis_ind]+' axis for '+descrip, fontsize=32)
+    fig.tight_layout()
 
     # for some reason memory is not released and in subsequent function calls this can cause errors
     del freqs,harms,ffts
@@ -357,6 +358,7 @@ def transfer_funcs(path,sensor='QPD',phase=False,nsamp=50000,fsamp=5000,agg_dict
             ax[i,j].grid(which='both')
         if i<rows and i<columns:
             ax[i,i].legend(loc='upper left',fontsize=10)
+        fig.tight_layout()
 
     return fig,ax
 
@@ -379,8 +381,6 @@ def wiener_filters(path, sensor='QPD', noise_only=False, phase=False):
     witness_channels = ['accel_x', 'accel_y', 'accel_z', 'mic_1']
     wiener = [True]*5
 
-    sensor = 'QPD'
-
     if sensor == 'QPD':
         sensor_channels = ['qpd_x', 'qpd_y', 'zpd']
         skip = ~np.array(wiener[0:3])
@@ -389,7 +389,7 @@ def wiener_filters(path, sensor='QPD', noise_only=False, phase=False):
         skip = ~np.array(wiener[3:])
     which_filters = ['filters_shaking', 'filters_noise'][noise_only]
 
-    fig, ax = plt.subplots(len(sensor_channels), 4, figsize=(14, 10 + 4*int(len(sensor_channels)>2)), \
+    fig, ax = plt.subplots(len(sensor_channels), 4, figsize=(12, 6 + 3*int(len(sensor_channels)>2)), \
                            sharex=True, sharey='row')
 
     with h5py.File(path, 'r') as filter_file:
@@ -431,7 +431,8 @@ def wiener_filters(path, sensor='QPD', noise_only=False, phase=False):
                     ax[i,0].set_ylabel(title_start + title_end + [' TF magnitude', ' TF phase [$^\circ$]'][int(phase)])
 
     fig.subplots_adjust(wspace=0.05, hspace=0.05)
-    fig.suptitle('Wiener filter transfer functions ' + ['magnitudes', 'phases'][int(phase)], y=0.94)
+    fig.suptitle('Wiener filter transfer functions ' + ['magnitudes', 'phases'][int(phase)])
+    fig.tight_layout()
 
     return fig, ax
 
@@ -701,7 +702,8 @@ def env_noise(agg_dicts, descrips=None, plot_inds=None,
     fig.subplots_adjust(hspace=0.1, wspace=0.07)
     titles = np.array(['ROI', 'full', 'Rayleigh'])
     title = titles[np.array([t.lower()==which for t in titles])][0]
-    fig.suptitle(sensor_title + ' ' + title + ' spectral densities', y=0.92 + 0.04*float(sensor=='mic'), fontsize=20)
+    fig.suptitle(sensor_title + ' ' + title + ' spectral densities', fontsize=20)
+    fig.tight_layout()
 
     # for some reason memory is not released and in subsequent function calls this can cause errors
     del ffts,accel_spec,freqs
@@ -814,7 +816,8 @@ def spectrogram(agg_dict,descrip=None,sensor='qpd',which='roi',\
     ax[-1].set_xlabel('Time since '+start_date+' [hours]')
     titles = np.array(['ROI', 'full', 'Rayleigh'])
     title = titles[np.array([t.lower()==which for t in titles])][0]
-    fig.suptitle(sensor_title + ' ' + title + ' spectrogram for ' + descrip, y=0.92 + 0.04*float(sensor=='mic'))
+    fig.suptitle(sensor_title + ' ' + title + ' spectrogram for ' + descrip)
+    fig.tight_layout()
     fig.subplots_adjust(hspace=0.08)
     
     # for some reason memory is not released and in subsequent function calls this can cause errors
@@ -890,6 +893,7 @@ def time_evolution(agg_dict,descrip=None,sensor='qpd',axis_ind=0,\
     ax[1,0].set_ylabel('Phase [$^\circ$]')
     ax[1,0].set_ylim([-200,200])
     ax[1,0].set_yticks([-180,0,180])
+    fig.tight_layout()
 
     # for some reason memory is not released and in subsequent function calls this can cause errors
     del freqs,amps,phases,times,av_times,start_date,hours,\
@@ -995,6 +999,7 @@ def position_drift(agg_dict, descrip=None, t_bin_width=None, pem_sensors=False):
     ax[-1].set_xlim([min(plot_times),max(plot_times)])
 
     fig.suptitle('Parameter drifts for ' + descrip)
+    fig.tight_layout()
 
     del lp,pt,bh,cx,cz,lp_t,pt_t,bh_t,cx_t,cz_t,times,plot_times,av_times,\
         start_date,hours,delta_t,num_t_bins,colors
@@ -1111,6 +1116,7 @@ def mles_vs_time(agg_dict, descrip=None, sensor='qpd', axis_ind=0, t_bin_width=N
                     .format(sensor.upper(),axes[axis_ind],descrip))
     ax[-1].set_xlabel('Time since '+start_date+' [hours]')
     ax[-1].set_xlim([min(plot_times),max(plot_times)])
+    fig.tight_layout()
 
     pem_data = None
     pem_data_t = None
@@ -1133,13 +1139,14 @@ def alpha_limit(agg_dict,descrip=None,sensor='qpd',title=None,lim_pos=None,lim_n
     lambdas = agg_dict['template_params'][0]
     if all(a is None for a in limit_args):
         # compute the limit for this dataset
-        likelihood_coeffs = fit_alpha_all_files(agg_dict,sensor=sensor)
-        likelihood_coeffs = combine_likelihoods_over_dim(likelihood_coeffs,which='file')
-        likelihood_coeffs = np.sum(likelihood_coeffs[:,:2,...],axis=1)
-        likelihood_coeffs[...,-1] = -likelihood_coeffs[...,1]/(2.*likelihood_coeffs[...,0])
-        lim_abs = get_abs_alpha_vs_lambda(likelihood_coeffs,lambdas)
-        likelihood_coeffs = combine_likelihoods_over_dim(likelihood_coeffs,which='harm')
-        lim_pos,lim_neg = get_alpha_vs_lambda(likelihood_coeffs,lambdas)
+        likelihood_coeffs = fit_alpha_all_files(agg_dict,sensor=sensor)[:,:,:2,...]
+        reduced_coeffs = combine_likelihoods_over_dim(likelihood_coeffs, which='file')
+        reduced_coeffs = combine_likelihoods_over_dim(reduced_coeffs, which='axis')
+        pos_coeffs, neg_coeffs, *_ = group_likelihoods_by_parameter(reduced_coeffs, num_cores=40)
+        pos_coeffs = add_systematic_uncertainty(pos_coeffs, 0.2)
+        neg_coeffs = add_systematic_uncertainty(neg_coeffs, 0.2)
+        lim_pos, _ = get_alpha_vs_lambda(pos_coeffs, lambdas, analytic=True)
+        _, lim_neg = get_alpha_vs_lambda(neg_coeffs, lambdas, analytic=True)
 
     # get the other previously saved limits
     lims = h5py.File('/home/clarkeh/limits_all.h5','r')
@@ -1171,6 +1178,7 @@ def alpha_limit(agg_dict,descrip=None,sensor='qpd',title=None,lim_pos=None,lim_n
     ax.set_ylim([1e2,1e12])
     ax.grid(which='both')
     ax.legend(ncol=3-int(all(a is None for a in limit_args)))
+    fig.tight_layout()
 
     del colors,lims,lambdas,lim_pos,lim_neg,lim_abs,lim_noise,descrip,sensor
     try:
@@ -1204,11 +1212,11 @@ def limit_vs_integration(agg_dict,descrip=None,sensor='qpd'):
             while len(indices)<1:
                 indices = np.random.randint(0,num_files,ind)
                 indices = indices[~agg_dict['is_noise'][indices]]
-            like_coeffs = fit_alpha_all_files(agg_dict,indices,sensor=sensor)
-            like_coeffs = combine_likelihoods_over_dim(like_coeffs,which='file')
-            like_coeffs = group_likelihoods_by_test(like_coeffs)
-            lim_pos[i,j] = get_limit_from_likelihoods(like_coeffs[:,ten_um_ind,:],alpha_sign=1)
-            lim_neg[i,j] = get_limit_from_likelihoods(like_coeffs[:,ten_um_ind,:],alpha_sign=-1)
+            like_coeffs = fit_alpha_all_files(agg_dict,indices,sensor=sensor,use_sidebands=True)
+            like_coeffs = combine_likelihoods_over_dim(like_coeffs,which='all')
+            # like_coeffs = group_likelihoods_by_test(like_coeffs)
+            lim_pos[i,j] = get_limit_analytic(like_coeffs[ten_um_ind,:],alpha_sign=1)
+            lim_neg[i,j] = get_limit_analytic(like_coeffs[ten_um_ind,:],alpha_sign=-1)
 
     # find the mean for each number of datasets
     lim_pos_mean = []
@@ -1252,6 +1260,7 @@ def limit_vs_integration(agg_dict,descrip=None,sensor='qpd'):
     ax.set_ylim([0.5*min(noise_lim_neg[-1],noise_lim_pos[-1]),2*max(first_lim_pos,first_lim_neg)])
     ax.legend(ncol=2)
     ax.grid()
+    fig.tight_layout()
 
     del num_files,num_chunks,subset_inds,lambdas,ten_um_ind,num_samples,lim_pos,lim_neg,\
         lim_pos_mean,lim_neg_mean,sigma_pos,sigma_neg,first_lim_pos,first_lim_neg,integ_times,\
@@ -1384,7 +1393,7 @@ def q_alpha_fit(alphas,q_vals,alpha_hat,range=[-1,2],sigma_sys=None):
     ax[0].axhline(0,color=colors[2],ls='--',label='95\% CL threshold')
     ax[1].plot(alphas,q_vals,ls='none',marker='o',ms=4,markeredgewidth=1.5,fillstyle='none',zorder=11)
     ax[1].plot(alpha_vals,a_hat*(alpha_vals-alpha_hat)**2)
-    ax[1].axhline(st.norm.ppf(1.-0.05/2.)**2,color=colors[2],ls='--')
+    ax[1].axhline(stats.norm.ppf(1.-0.05/2.)**2,color=colors[2],ls='--')
     y_max = ax[0].get_ylim()[1]
     ax[0].set_ylim([10,y_max])
     ax[0].set_yticks(np.logspace(2,np.floor(np.log10(y_max)),max(int(np.floor(np.log10(y_max))-1),1)))
