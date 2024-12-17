@@ -7,7 +7,7 @@ import numpy as np
 import h5py
 from optlevanalysis.stats import *
 import argparse
-style.use('optlevstyle.mplstyle')
+style.use('../src/optlevanalysis/optlevstyle.mplstyle')
 
 # command line arguments
 parser = argparse.ArgumentParser()
@@ -96,7 +96,7 @@ ax1.set_ylim([1e6,1e12])
 ax1.set_title('Limits by axis and harmonic for '+descrip+' data using the '+mode_titles[mode]+' method',fontsize=20)
 ax1.grid(which='both')
 ax1.legend(handles=lines,labels=labels,ncol=5,fontsize=10,handlelength=4)
-fig1.savefig('/home/clarkeh/Figures/limits_by_axis_and_harm_'+\
+fig1.savefig('/home/clarkeh/Figures/limit_plots/limits_by_axis_and_harm_'+\
              mode_titles[mode].replace(' ','_')+'_method_for_'+descrip.replace(' ','_')+'_data.png')
 
 # get the other previously saved limits
@@ -122,5 +122,5 @@ ax2.set_xlim([1e0,1e2])
 ax2.set_ylim([1e2,1e12])
 ax2.grid(which='both')
 ax2.legend(ncol=2)
-fig2.savefig('/home/clarkeh/Figures/limits_combined_'+\
+fig2.savefig('/home/clarkeh/Figures/limit_plots/limits_combined_'+\
              mode_titles[mode].replace(' ','_')+'_method_for_'+descrip.replace(' ','_')+'_data.png')
