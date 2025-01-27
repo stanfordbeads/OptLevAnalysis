@@ -1094,13 +1094,16 @@ def mles_vs_time(agg_dict, descrip=None, sensor='qpd', axis_ind=0, t_bin_width=N
         colors = plt.get_cmap('Paired',12)
         sensors = ['Fiber', 'Input', 'Output']
         axis_2 = ax[-2].twinx()
+        axis_3 = ax[-1].twinx()
         for i in range(3):
             ax[-2].plot(pem_times_t, pem_data_t[0,i,:], marker='s', ms=5, \
-                        color=colors(2*i), label=sensors[i]+' temp. -- {:.2f}'.format(pem_means[0,i,0]))
+                        color=colors(2*i), label=sensors[i]+' temp. $-$ {:.2f}'.format(pem_means[0,i,0]))
             axis_2.plot(pem_times_t, pem_data_t[1,i,:], marker='D', ms=5, \
-                        color=colors(2*i+1), label=sensors[i]+' rel. hum. -- {:.2f}'.format(pem_means[1,i,0]))
-            ax[-1].plot(pem_times_t, pem_data_t[2,i,:], marker='o', ms=5, \
-                        color=colors(2*i), label=sensors[i]+' press.. -- {:.2f}'.format(pem_means[2,i,0]))
+                        color=colors(2*i+1), label=sensors[i]+' rel. hum. $-$ {:.2f}'.format(pem_means[1,i,0]))
+            ax[-1].plot(pem_times_t, pem_data_t[2,i,:], marker='s', ms=5, \
+                        color=colors(2*i), label=sensors[i]+' press. $-$ {:.2f}'.format(pem_means[2,i,0]))
+            axis_3.plot(pem_times_t, pem_data_t[3,i,:], marker='D', ms=5, \
+                        color=colors(2*i+1), label=sensors[i]+' $n~-$ {:.8f}'.format(pem_means[3,i,0]))
         ax[-2].set_ylabel('Temperature [$^\circ$C]')
         handles1, labels1 = ax[-2].get_legend_handles_labels()
         handles2, labels2 = axis_2.get_legend_handles_labels()
@@ -1109,7 +1112,12 @@ def mles_vs_time(agg_dict, descrip=None, sensor='qpd', axis_ind=0, t_bin_width=N
         axis_2.legend(handles, labels, ncol=3, handlelength=1., columnspacing=1.)
         axis_2.set_ylabel('Relative humidity [\%]')
         ax[-1].set_ylabel('Pressure [mbar]')
-        ax[-1].legend(ncol=3)
+        handles1, labels1 = ax[-1].get_legend_handles_labels()
+        handles2, labels2 = axis_3.get_legend_handles_labels()
+        handles = [item for pair in zip(handles1, handles2) for item in pair]
+        labels = [item for pair in zip(labels1, labels2) for item in pair]
+        axis_3.legend(handles, labels, ncol=3, handlelength=1., columnspacing=1.)
+        axis_3.set_ylabel('Refractive index')
 
     # axis labels and limits
     ax[0].set_title(r'MLE of $\alpha(\lambda=10\mu \mathrm{{m}})$ from {{{}}} {{{}}} for {{{}}}'\

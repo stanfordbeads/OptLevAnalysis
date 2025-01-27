@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.optimize import curve_fit
 import scipy.signal as sig
+import optlevanalysis.ref_index as ri
 
 """Miscellaneous functions used for data reduction/calibration.
 """
@@ -252,6 +253,13 @@ def get_environmental_data(agg_dict):
     pressures_arr = np.array(pressures)
     datetimes_arr = np.array(datetimes)
 
+    # compute the corresponding refractive index
+    ref_inds_arr = np.zeros_like(temps_arr)
+    for i in range(temps_arr.shape[0]):
+        for j in range(temps_arr.shape[1]):
+            ref_inds_arr[i,j] = ri.edlen(1064., temps_arr[i,j], 1e2*pressures_arr[i,j], relhums_arr[i,j])
+
     pem_data = np.vstack([datetimes_arr[np.newaxis,...], temps_arr[np.newaxis,...], \
-                          relhums_arr[np.newaxis,...], pressures_arr[np.newaxis,...]])
+                          relhums_arr[np.newaxis,...], pressures_arr[np.newaxis,...], \
+                          ref_inds_arr[np.newaxis,...]])
     return pem_data
