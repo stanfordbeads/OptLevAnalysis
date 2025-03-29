@@ -106,7 +106,7 @@ class FileData:
                   harms=[],width=0,noise_bins=10,qpd_diag_mat=None,downsample=True,\
                   wiener=[False,True,False,False,False],time_domain=False,cant_drive_freq=3.0,\
                   signal_model=None,ml_model=None,p0_bead=None,mass_bead=0,lightweight=False,\
-                  no_tf=False,force_cal_factors=[],window=None):
+                  no_tf=False,force_cal_factors=[],window=None,het_phase=False):
         """Applies calibrations to the cantilever data and QPD data, then gets FFTs for both.
 
         :param tf_path: Path to the HDF5 file containing the transfer function data and fits, defaults to None
@@ -136,7 +136,8 @@ class FileData:
         :type signal_model: SignalModel, optional
         :param p0_bead: Position of the bead, defaults to None
         :type p0_bead: list, optional
-        :param mass_bead: Mass of the bead in picograms, defaults to 0. If not provided, the mass is computed from the nominal radius and density.
+        :param mass_bead: Mass of the bead in picograms, defaults to 0. If not provided, the mass is computed 
+        from the nominal radius and density.
         :type mass_bead: int, optional
         :param lightweight: Drop some data after loading, defaults to False
         :type lightweight: bool, optional
@@ -154,7 +155,7 @@ class FileData:
         if qpd_diag_mat is not None:
             self.qpd_diag_mat = qpd_diag_mat
             self.diagonalize_qpd = True
-        self.get_xyz_from_quad()
+        self.get_xyz_from_quad(het_phase=het_phase)
         self.xypd_raw_data = self.data_dict['xypd_data']
         self.qpd_dc_offsets = np.concatenate((np.mean(self.quad_raw_data, axis=-1), np.mean(self.quad_null, axis=-1)))
         self.xypd_dc_offsets = np.mean(self.xypd_raw_data, axis=-1)
@@ -169,7 +170,8 @@ class FileData:
             self.downsample_raw_data(wiener, time_domain, window)
         self.calibrate_stage_position()
         self.calibrate_bead_response(tf_path=tf_path,sensor='QPD',cal_drive_freq=cal_drive_freq,no_tf=no_tf,\
-                                     force_cal_factors=force_cal_factors,time_domain=time_domain,wiener=wiener)
+                                     force_cal_factors=force_cal_factors,time_domain=time_domain,wiener=wiener,\
+                                     het_phase=het_phase)
         self.calibrate_bead_response(tf_path=tf_path,sensor='XYPD',cal_drive_freq=cal_drive_freq,no_tf=no_tf,\
                                      time_domain=time_domain,wiener=wiener)
         self.xypd_force_calibrated[2,:] = np.copy(self.qpd_force_calibrated[2,:])
@@ -381,7 +383,7 @@ class FileData:
         self.mean_cant_pos = np.mean(self.cant_pos_calibrated,axis=1)
     
     
-    def get_xyz_from_quad(self):
+    def get_xyz_from_quad(self, het_phase=False):
         """Calculates x, y, and z from the quadrant photodiode amplitude and phase data.
         Uses a QPD diagonalization matrix if one is provided.
         """
@@ -394,15 +396,24 @@ class FileData:
         # III -> 3
         # IV -> 1
 
-        # multiply vector of qpd amps by calibration matrix
-        xy_vec = np.matmul(self.qpd_diag_mat,amps[:4,:])
-        x = xy_vec[0,:]
-        y = xy_vec[1,:]
-        n1 = xy_vec[2,:]
-        n2 = xy_vec[3,:]
+        if not het_phase:
+            # multiply vector of qpd amps by calibration matrix
+            xy_vec = np.matmul(self.qpd_diag_mat, amps[:4,:])
+            x = xy_vec[0,:]
+            y = xy_vec[1,:]
+            n1 = xy_vec[2,:]
+            n2 = xy_vec[3,:]
 
-        # total light to normalize by
-        quad_sum = np.sum(amps[:4,:],axis=0)
+            # total light to normalize by
+            quad_sum = np.sum(amps[:4,:],axis=0)
+
+        else:
+            xy_vec = np.matmul(self.qpd_diag_mat, phases[:4,:])
+            x = xy_vec[0,:]*gv_to_float(np.array([1]),15)#*1.064/2/np.pi)
+            y = xy_vec[1,:]*gv_to_float(np.array([1]),15)#*1.064/2/np.pi)
+            n1 = xy_vec[2,:]
+            n2 = xy_vec[3,:]
+            quad_sum = 1.
 
         # set object attribute with a numpy array of x,y,z
         self.quad_raw_data = np.array([x.astype(np.float64)/quad_sum,y.astype(np.float64)/quad_sum,phases[4]])
@@ -621,7 +632,7 @@ class FileData:
 
     def calibrate_bead_response(self,tf_path=None,sensor='QPD',cal_drive_freq=71.0,\
                                 no_tf=False,force_cal_factors=[],time_domain=False,\
-                                wiener=[False,True,False,False,False]):
+                                wiener=[False,True,False,False,False], het_phase=False):
         """Applies correction using the transfer function to calibrate the
         x, y, and z responses.
 
@@ -643,7 +654,8 @@ class FileData:
             # function in the right format. For old data, specify the path manually
             if int(self.date) > 20230101 or sensor=='QPD':
                 Harr,force_cal_factors = self.tf_array_fitted(self.freqs,sensor,tf_path=tf_path,\
-                                                              diagonalize_qpd=self.diagonalize_qpd)
+                                                              diagonalize_qpd=self.diagonalize_qpd,\
+                                                              het_phase=het_phase)
             else:
                 tf_path = '/data/new_trap_processed/calibrations/transfer_funcs/20200320.trans'
                 Harr,force_cal_factors = self.tf_array_interpolated(self.freqs,tf_path=tf_path,\
@@ -675,7 +687,7 @@ class FileData:
 
         # apply the wiener filter to the uncalibrated spectra
         if not time_domain and not all(~np.array(wiener)):
-            data_fft = self.filter_freq_domain(data_fft, sensor=sensor, wiener=wiener)
+            data_fft = self.filter_freq_domain(data_fft, sensor=sensor, wiener=wiener, het_phase=het_phase)
 
         # matrix multiplication with index contraction made explicit
         # 'kj,ki' = matrix multiplication along second two indices (the 3x3 part)
@@ -705,7 +717,8 @@ class FileData:
             self.xypd_dc_offsets[-1] = self.qpd_dc_offsets[2]/self.force_cal_factors_qpd[2]
 
 
-    def filter_freq_domain(self, sensor_ffts, sensor='QPD', wiener=[False,True,False,False,False]):
+    def filter_freq_domain(self, sensor_ffts, sensor='QPD', wiener=[False,True,False,False,False], \
+                           het_phase=False):
         """Applies the Wiener filter in the frequency domain.
 
         :param wiener: a list that specifies which signal streams the noise data should be subtracted from, 
@@ -715,6 +728,7 @@ class FileData:
         :type accel_lpf: list of numpy.ndarray
         """
 
+        filter_filename = '/wienerFilters' + ['', '_phaseQuad'][int(het_phase)] + '.h5'
         witness_channels = ['accel_x', 'accel_y', 'accel_z', 'mic_1']
 
         # DFTs of the accelerometer and microphone channels
@@ -733,7 +747,7 @@ class FileData:
         # load the pre-trained filters for this data
         with h5py.File('/data/new_trap_processed/calibrations/data_processing_filters/freq_domain/' + \
                        self.file_name.replace('/data/new_trap/','').replace(self.file_name.split('/')[-1],'') + \
-                       '/wienerFilters.h5') as filter_file:
+                       filter_filename) as filter_file:
             for i, chan in enumerate(sensor_channels):
                 if skip[i]: continue
                 filters = []
@@ -757,13 +771,16 @@ class FileData:
                 preds = np.sum(preds, axis=0)
                 # scale z to physical units to match the scaling in the wiener filter files
                 if sensor_channels[i]=='zpd':
-                    preds /= (1.064*gv_to_float(np.array([1]),15)/2/np.pi)
+                    if het_phase:
+                        preds /= (gv_to_float(np.array([1]),15))
+                    else:
+                        preds /= (1.064*gv_to_float(np.array([1]),15)/2/np.pi)
                 sensor_ffts[i] -= preds
 
         return sensor_ffts
 
 
-    def tf_array_fitted(self,freqs,sensor,tf_path=None,diagonalize_qpd=False,qpd_phase=False):
+    def tf_array_fitted(self,freqs,sensor,tf_path=None,diagonalize_qpd=False,het_phase=False):
         """Gets the transfer function array from the HDF5 file containing the fitted poles,
         zeros, and gain from the measured transfer functions along x, y, and z, and returns it.
 
@@ -781,7 +798,8 @@ class FileData:
 
         # transfer function data should be stored here in a folder named by the date
         if tf_path is None:
-            tf_path = '/data/new_trap_processed/calibrations/transfer_funcs/'+str(self.date)+'/TF.h5'
+            tf_path = '/data/new_trap_processed/calibrations/transfer_funcs/' + str(self.date) \
+                      + '/TF' + ['', '_phaseQuad'][int(het_phase)] + '.h5'
 
         # select the right calibration factor if diagonalizing the QPD
         suffix = ''
@@ -1257,6 +1275,7 @@ class AggregateData:
         self.xypd_asds = np.array(())
         self.signal_models = []
         self.lightweight = True
+        self.het_phase = False
         self.first_index = first_index
 
 
@@ -1330,7 +1349,7 @@ class AggregateData:
     def load_file_data(self,num_cores=30,diagonalize_qpd=False,load_templates=False,harms=[],\
                        max_freq=500.,downsample=True,wiener=[False,True,False,False,False],\
                        time_domain=False,no_tf=False,force_cal_factors=[],no_config=False,\
-                       ml_model=None,window=None,lightweight=True):
+                       ml_model=None,window=None,lightweight=True,het_phase=False):
         """Creates a FileData object for each of the files in the file list and loads
         in the relevant data for physics analysis.
 
@@ -1371,6 +1390,8 @@ class AggregateData:
             qpd_diag_mats = [None]*len(self.qpd_diag_mats)
         if downsample and any(wiener):
             self.noise_subtracted = True
+        if het_phase:
+            self.het_phase = True
         print('Loading data from {} files...'.format(len(self.file_list)))
         file_data_objs = Parallel(n_jobs=num_cores)(delayed(self.process_file)\
                                                     (file_path,qpd_diag_mats[self.bin_indices[i,4]],\
@@ -1378,7 +1399,7 @@ class AggregateData:
                                                      self.p0_bead[self.bin_indices[i,2]],\
                                                      self.mass_bead[self.bin_indices[i,1]],\
                                                      harms,max_freq,downsample,wiener,time_domain,\
-                                                     no_tf,force_cal_factors,window,lightweight) \
+                                                     no_tf,force_cal_factors,window,lightweight,het_phase) \
                                                      for i,file_path in enumerate(tqdm(self.file_list)))
         # record which files are bad and save the error logs
         error_logs = []
@@ -1479,7 +1500,7 @@ class AggregateData:
 
     def process_file(self,file_path,qpd_diag_mat=None,signal_model=None,ml_model=None,p0_bead=None,\
                      mass_bead=0,harms=[],max_freq=2500.,downsample=True,wiener=[False,True,False,False,False],\
-                     time_domain=False,no_tf=False,force_cal_factors=[],window=None,lightweight=True):
+                     time_domain=False,no_tf=False,force_cal_factors=[],window=None,lightweight=True,het_phase=False):
         """Processes data for an individual file and returns the FileData object.
 
         :param file_path: Path to the raw HDF5 file to be loaded
@@ -1515,7 +1536,7 @@ class AggregateData:
             this_file.load_data(qpd_diag_mat=qpd_diag_mat,signal_model=signal_model,ml_model=ml_model,\
                                 p0_bead=p0_bead,mass_bead=mass_bead,harms=harms,downsample=downsample,wiener=wiener,\
                                 time_domain=time_domain,max_freq=max_freq,no_tf=no_tf,force_cal_factors=force_cal_factors,\
-                                window=window,lightweight=lightweight)
+                                window=window,lightweight=lightweight,het_phase=het_phase)
         except Exception as e:
             this_file.is_bad = True
             this_file.error_log = repr(e)
@@ -2372,6 +2393,7 @@ class AggregateData:
         lightweights = []
         diagonalize = []
         subtracted = []
+        het_phases = []
         for object in object_list:
             ffts.append(object.agg_dict['qpd_ffts_full'].shape[-1]>2)
             asds.append(object.qpd_asds.shape[-1]>2)
@@ -2382,6 +2404,7 @@ class AggregateData:
             lightweights.append(object.lightweight)
             diagonalize.append(object.diagonalize)
             subtracted.append(object.noise_subtracted)
+            het_phases.append(object.het_phase)
         if not (all(np.isclose(np.array(fsamps)-fsamps[0],0)) or \
                 all(np.isclose(np.array(nsamps)-nsamps[0],0))):
             print('Error: inconsistent number of samples or sampling frequency between objects!')
@@ -2399,6 +2422,8 @@ class AggregateData:
         if not all(np.array(subtracted)==subtracted[0]):
             print('Error: cannot merge under different noise subtraction conditions!')
             return
+        if not all(np.array(het_phases)==het_phases[0]):
+            print('Error: cannot merge heterodyne amplitude data with phase data!')
         merge_asds = True
         if not all(asds):
             print('Warning: not all objects have spectral density estimates. Skipping this attribute...')
@@ -2415,6 +2440,7 @@ class AggregateData:
             self.lightweight = object1.lightweight
             self.diagonalize = object1.diagonalize
             self.noise_subtracted = object1.noise_subtracted
+            self.het_phase = object1.het_phase
             self.data_dirs = np.array(list(object1.data_dirs) + list(object2.data_dirs))
             self.file_prefixes = np.array(list(object1.file_prefixes) + list(object2.file_prefixes))
             self.file_suffixes = np.array(list(object1.file_suffixes) + list(object2.file_suffixes))
@@ -2541,6 +2567,7 @@ class AggregateData:
             self.lightweight = bool(np.array(f['run_params/lightweight']))
             self.diagonalize = bool(np.array(f['run_params/diagonalize']))
             self.noise_subtracted = bool(np.array(f['run_params/noise_subtracted']))
+            self.het_phase = bool(np.array(f['run_params/het_phase']))
             confs = np.array(f['run_params/configs'],dtype=np.str_)
             self.configs = np.array([ast.literal_eval(conf) for conf in confs])
             self.data_dirs = np.array(f['run_params/data_dirs'],dtype=np.str_)
