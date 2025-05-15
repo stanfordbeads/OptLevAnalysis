@@ -118,19 +118,26 @@ for i, lamb_val in enumerate(master_lambda):
 ### Plot all the constraints individually and the extracted best curve
 colors = [plt.get_cmap('plasma',len(alldata))(i) for i in range(len(alldata))]
 
-# # save the data so it can be opened later and plotted for my thesis
-# with h5py.File('pressure_drop_prototype.h5', 'w') as d:
-#     short_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('ascii').strip()
-#     git_origin = subprocess.check_output(['git', 'config', '--get', 'remote.origin.url']).decode('ascii').strip()
+# save the data so it can be opened later and plotted for my thesis
+with h5py.File('/home/clarkeh/thesis_plot_data/all_alpha_lambda.h5', 'w') as d:
+    short_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('ascii').strip()
+    git_origin = subprocess.check_output(['git', 'config', '--get', 'remote.origin.url']).decode('ascii').strip()
     
-#     d.attrs['git_revision_short_hash'] = short_hash
-#     d.attrs['git_origin'] = git_origin
-#     d.attrs['creation_timestamp'] = time.time()
-#     d.attrs['creation_user'] = str(os.environ.get('USER'))
+    d.attrs['git_revision_short_hash'] = short_hash
+    d.attrs['git_origin'] = git_origin
+    d.attrs['creation_timestamp'] = time.time()
+    d.attrs['creation_user'] = str(os.environ.get('USER'))
 
-for i, data in enumerate(alldata):
-    label = allfiles[i].split('/')[-1].split('.')[0]
-    plt.loglog(data[:,0], data[:,1], color=colors[i], label=label)
+    for i, data in enumerate(alldata):
+        label = allfiles[i].split('/')[-1].split('.')[0]
+        plt.loglog(data[:,0], data[:,1], color=colors[i], label=label)
+        
+        d.create_dataset(label + '/' + 'lambdas', data=data[:,0])
+        d.create_dataset(label + '/' + 'alphas', data[:,1])
+
+    d.create_dataset('master/lambdas', data=master_lambda)
+    d.create_dataset('master/alphas', data=master_alpha)
+
 plt.legend(fontsize=8, ncol=2)
 plt.loglog(master_lambda, master_alpha, lw=2, ls='--', color='r')
 plt.savefig('/home/clarkeh/gravity_sens_plot/prev_meas/all_grav_limits.png')
